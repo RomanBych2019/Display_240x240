@@ -1,0 +1,14 @@
+{
+    "files.associations": {
+        "array": "cpp",
+        "string": "cpp",
+        "string_view": "cpp",
+        "vector": "cpp",
+        "lv_sprintf.h": "c",
+        "lv_log.h": "c",
+        "lv_conf_internal.h": "c",
+        "cmath": "cpp",
+        "*.tcc": "cpp",
+        "condition_variable": "cpp"
+    }
+}
