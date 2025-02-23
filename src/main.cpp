@@ -81,27 +81,17 @@ void setup(void)
 
 void loop()
 {
-  bool FingerNum = touch.getTouch(&touchX, &touchY, &gesture);
-  if (FingerNum)
-  {
-    // Serial.printf("X:%d,Y:%d,gesture:%x\n", touchX, touchY, gesture);
-    gesture == 1 ? touchDown = true : touchDown = false;
-    gesture == 2 ? touchUp = true : touchUp = false;
-
-    if (maindisplay->getScreenNowShow() == 0)
-    {
-      if ((touchX > 100 && touchX < 140) && (touchY > 100 && touchY < 10))
-        data_can.state ? touchOn = false : touchOn = true;
-    }
-  }
 
   // You can set custom timeout, default is 1000
   if (ESP32Can.readFrame(rxFrame, 0))
   {
     analise_can_id(rxFrame);
   }
-  maindisplay->updateData(&data_can);
-  data_can.levelEconomicalDriving = calculator(data_can);
+
+  maindisplay->updateData(data_can);
+
+  if (data_can.state)
+    data_can.levelEconomicalDriving = calculator(data_can);
 }
 
 void analise_can_id(CanFrame &frame)
@@ -351,20 +341,21 @@ void update_TFT(void *pvParameters)
 {
   for (;;)
   {
+    if (touch.getTouch(&touchX, &touchY, &gesture))
+    {
+      // Serial.printf("X:%d,Y:%d,gesture:%x\n", touchX, touchY, gesture);
+      gesture == 1 ? screenNumber++ : screenNumber;
+      gesture == 2 ? screenNumber-- : screenNumber;
+
+      if (maindisplay->getScreenNowShow() == 0)
+      {
+        if ((touchX > 100 && touchX < 140) && (touchY > 100 && touchY < 10))
+          data_can.state ? touchOn = false : touchOn = true;
+      }
+    }
     // Serial.printf("Counter lost can EVO: %d\n", counter_lost_can_EVO);
     // Serial.printf("TouchDown: %d\n", touchDown);
     // Serial.printf("TouchUp: %d\n", touchUp);
-
-    if (touchDown)
-    {
-      screenNumber++;
-      touchDown = 0;
-    }
-    if (touchUp)
-    {
-      screenNumber--;
-      touchUp = 0;
-    }
 
     if (screenNumber > 3)
       screenNumber = 0;
@@ -381,7 +372,7 @@ void update_TFT(void *pvParameters)
     }
     else
     {
-      if (data_can.state == 1)
+      if (data_can.state)
       {
         if (data_can.distLPG.begin == 0 && data_can.distance != 0)
           data_can.distLPG.begin = data_can.distance;

@@ -10,7 +10,7 @@
 #define MAX_BRIGHT 200
 #define MAX_IMAGE_WIDTH 240
 
-#define DEBUG_ENABLE
+//#define DEBUG_ENABLE
 
 #ifdef DEBUG_ENABLE
 #define DEBUG(x) Serial.println(x)
@@ -21,7 +21,7 @@
 TFT_eSPI tft = TFT_eSPI();
 TFT_eSprite spr = TFT_eSprite(&tft); // Создаем объект sprite для работы с изображением на экране
 
-const unsigned int KG_TO_M3 = 1;                    // коэф переводка  газа из кг в м3
+const unsigned int KG_TO_M3 = 1; // коэф переводка  газа из кг в м3
 
 void pngDraw(PNGDRAW *pDraw)
 {
@@ -36,7 +36,6 @@ class TFT_240_240
 {
 
 private:
-
     struct dot
     {
         int16_t x;
@@ -44,7 +43,7 @@ private:
         int fill;
     };
 
-    Can_Data const *data{};
+    Can_Data data{};
     int screenNowShow = 0;
 
     int set_color(int vol)
@@ -93,31 +92,32 @@ private:
         backLight(true);
     }
 
-     //  экран кнопки включения
-     void screen_ButtonOn(int status)
-     {
-         spr.createSprite(TFT_WIDTH, TFT_HEIGHT);
-         spr.fillScreen(TFT_BLACK);
- 
-         if (status)
-             pngShow("/screen11.png");
-         else
-             pngShow("/screen10.png");
- 
-         spr.pushSprite(0, 0, TFT_TRANSPARENT);
-         spr.deleteSprite();
-         screenNowShow = 0;
- 
-         DEBUG("Screen:" + String(screenNowShow));
-     }
- 
+    //  экран кнопки включения
+    void screen_ButtonOn(int stat)
+    {
+        spr.createSprite(TFT_WIDTH, TFT_HEIGHT);
+        spr.fillScreen(TFT_BLACK);
+        DEBUG(stat);
+
+        //  if (data.state)
+        //      pngShow("/screen11.png");
+        //  else
+        pngShow("/screen10.png");
+
+        spr.pushSprite(0, 0, TFT_TRANSPARENT);
+        spr.deleteSprite();
+        //  screenNowShow = 0;
+
+        DEBUG("Screen:" + String(screenNowShow));
+    }
+
     //  экран вывода акселератора и среднего расхода
     void screen_ACC(int map_level, int ACC, String str = "")
     {
         spr.createSprite(TFT_WIDTH, TFT_HEIGHT);
         spr.fillScreen(TFT_BLACK);
 
-        pngShow("/screen1.png");
+        pngShow("/screen3.png");
 
         ACC = constrain(ACC, 0, 100);
         int color = set_color(map_level);
@@ -219,7 +219,7 @@ private:
         spr.fillScreen(TFT_BLACK);
         cngLevel = constrain(cngLevel / 2, 0, 100);
         int color = set_color(map_level);
-        pngShow("/screen3.png");
+        pngShow("/screen1.png");
         if (str == "Disel")
             color = TFT_DARKGREY;
         for (int i = 0; i < 6; i++)
@@ -335,7 +335,7 @@ public:
         }
     }
 
-    void updateData(const Can_Data *dat)
+    void updateData(Can_Data dat)
     {
         data = dat;
     }
@@ -345,63 +345,63 @@ public:
         switch (screenNumber)
         {
         case 0:
-            screen_ButtonOn(data->state);
+            screen_ButtonOn(data.state);
             break;
         case 1:
-            if (data->state == 1)
+            if (data.state == 1)
             {
-                if (data->wheelSpeed > 20)
+                if (data.wheelSpeed > 20)
                 {
-                    if (data->cruise == 0)
+                    if (data.cruise == 0)
                     {
-                        if (data->distLPG.result > 1000)
-                            screen_ACC(data->levelEconomicalDriving, data->ACC, String(data->cngTripFuel * 100.0 / data->distLPG.result, 1));
+                        if (data.distLPG.result > 1000)
+                            screen_ACC(data.levelEconomicalDriving, data.ACC, String(data.cngTripFuel * 100.0 / data.distLPG.result, 1));
                         else
-                            screen_ACC(data->levelEconomicalDriving, data->ACC);
+                            screen_ACC(data.levelEconomicalDriving, data.ACC);
                     }
-                    else if (data->engineLoad < 10)
+                    else if (data.engineLoad < 10)
                         screen_ACC(0, 0, "Cruise");
-                    else if (data->engineLoad < 25)
+                    else if (data.engineLoad < 25)
                         screen_ACC(50, 0, "Cruise");
-                    else if (data->engineLoad < 50)
+                    else if (data.engineLoad < 50)
                         screen_ACC(100, 0, "Cruise");
-                    else if (data->engineLoad < 65)
+                    else if (data.engineLoad < 65)
                         screen_ACC(50, 0, "Cruise");
                     else
                         screen_ACC(0, -1);
                 }
                 else
                 {
-                    screen_ACC(0, data->ACC);
+                    screen_ACC(0, data.ACC);
                 }
             }
             else
             {
-                screen_ACC(0, data->ACC, "Disel");
+                screen_ACC(0, data.ACC, "Disel");
             }
             break;
 
         case 3:
-            screen_EVO(1.0 * (data->cngWaterTemperature),
-                     0.01 * data->cngTurboPressure,
-                     0.02 * data->cngRailPressure,
-                     data->cngLevel, data->errorEVO,
-                     0.1 * data->cngInjectionTime,
-                     0.1 * data->cngIstValue,
-                     "id " + String(data->verID) + "  fw " + String(data->verFMlow));
+            screen_EVO(1.0 * (data.cngWaterTemperature),
+                       0.01 * data.cngTurboPressure,
+                       0.02 * data.cngRailPressure,
+                       data.cngLevel, data.errorEVO,
+                       0.1 * data.cngInjectionTime,
+                       0.1 * data.cngIstValue,
+                       "id " + String(data.verID) + "  fw " + String(data.verFMlow));
             break;
 
         case 2:
-            if (data->state == 1)
+            if (data.state == 1)
             {
-                if (data->distLPG.result > 1000 && data->cngTripFuel > 0)
-                    screen_CNGLevel(data->levelEconomicalDriving, data->cngLevel, String((data->cngLevel * data->tankVolume) / (200 * KG_TO_M3) * data->distLPG.result / data->cngTripFuel, 1));
+                if (data.distLPG.result > 1000 && data.cngTripFuel > 0)
+                    screen_CNGLevel(data.levelEconomicalDriving, data.cngLevel, String((data.cngLevel * data.tankVolume) / (200 * KG_TO_M3) * data.distLPG.result / data.cngTripFuel, 1));
                 else
-                screen_CNGLevel(data->levelEconomicalDriving, data->cngLevel, String((data->cngLevel * data->tankVolume / 200) / 18 * 100, 1));
+                    screen_CNGLevel(data.levelEconomicalDriving, data.cngLevel, String((data.cngLevel * data.tankVolume / 200) / 18 * 100, 1));
             }
             else
             {
-                screen_CNGLevel(data->levelEconomicalDriving, data->cngLevel, String((data->cngLevel * data->tankVolume / 200) / 18 * 100, 1), "Disel");
+                screen_CNGLevel(data.levelEconomicalDriving, data.cngLevel, String((data.cngLevel * data.tankVolume / 200) / 18 * 100, 1), "Disel");
             }
             break;
 
