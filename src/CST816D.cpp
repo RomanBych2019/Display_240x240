@@ -50,7 +50,7 @@ bool CST816D::getTouch(uint16_t *x, uint16_t *y, uint8_t *gesture)
     FingerIndex = (bool)i2c_read(0x02);
 
     *gesture = i2c_read(0x01);
-    if (!(*gesture == SlideUp || *gesture == SlideDown))
+    if (!(*gesture == SlideUp || *gesture == SlideDown || *gesture == LongPress))
     {
         *gesture = None;
     }
@@ -59,8 +59,6 @@ bool CST816D::getTouch(uint16_t *x, uint16_t *y, uint8_t *gesture)
     i2c_read_continuous(0x03, data, 4);
     *x = ((data[0] & 0x0f) << 8) | data[1];
     *y = ((data[2] & 0x0f) << 8) | data[3];
-
-   // *x=240-*x;
 
     return FingerIndex;
 }

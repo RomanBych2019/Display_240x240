@@ -71,7 +71,7 @@ void setup(void) {
 
   // ESP32 will crash if any of the fonts are missing
   bool font_missing = false;
-  if (LittleFS.exists("/NotoSansBold15.vlw")    == false) font_missing = true;
+  if (LittleFS.exists("/FreeSans9pt7b.h")    == false) font_missing = true;
   if (LittleFS.exists("/NotoSansBold36.vlw")    == false) font_missing = true;
 
   if (font_missing)

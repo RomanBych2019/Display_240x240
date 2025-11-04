@@ -246,7 +246,10 @@ bool TwaiCAN::begin(TwaiSpeed twaiSpeed,
             TWAI_TIMING_CONFIG_1MBITS()
         };
 
-        twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();
+        // twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();
+
+        // twai_filter_config_t f_config;
+        // twai_generate_filter(0,0);
 
         if(!gConfig) gConfig = &g_config;
         if(!tConfig) tConfig = &t_config[speed];

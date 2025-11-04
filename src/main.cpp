@@ -1,101 +1,155 @@
 #include "main.h"
+#include <map>
 
 void setup(void)
 {
-  Serial.begin(115200);
 
-  while (!Serial)
-  {
-    yield(); // Stay here twiddling thumbs waiting
-  }
+  Serial.begin(115200);
 
   if (!FileSys.begin(FORMAT_LITTLEFS_IF_FAILED))
   {
-    DEBUG("LittleFS initialisation failed!");
     while (1)
       yield(); // Stay here twiddling thumbs waiting
   }
+  maindisplay = new TFT_240_240(FileSys);
 
-  maindisplay = new TFT_240_240;
   touch.begin();
   wifiInit();
 
   if (!parse_csv(map_ACC_RPM, MAP_ACC_RPM_NAME))
     parse_csv(map_ACC_RPM, COPY_MAP_ACC_RPM_NAME);
 
-  // Set pins
-  ESP32Can.setPins(CAN_TX, CAN_RX);
-
-  // You can set custom size for the queues - those are default
-  ESP32Can.setRxQueueSize(5);
-  ESP32Can.setTxQueueSize(1);
-  set_mask_filtr_can_29();
-
-  // .setSpeed() and .begin() functions require to use TwaiSpeed enum,
-  // but you can easily convert it from numerical value using .convertSpeed()
-  ESP32Can.setSpeed(ESP32Can.convertSpeed(data_can.canSpeed));
-
-  // You can also just use .begin()..
-  if (ESP32Can.begin())
-    DEBUG("CAN BUS Shield init ok! Speed: " + String(data_can.canSpeed));
-  else
-    DEBUG("CAN BUS init fail");
+  ESP32Can.twaiGenerateFilter(0x1CFFFFFF, 0x18000000, true);
+  ESP32Can.begin(ESP32Can.convertSpeed(data_can.canSpeed), CAN_TX, CAN_RX, 10, 10);
 
   xTaskCreatePinnedToCore(
-      update_TFT,        /* Обновление WiFi */
+      update_TFT,        /* Обновление */
       "Task_update_TFT", /* Название задачи */
-      8192,              /* Размер стека задачи */
+      4096,              /* Размер стека задачи */
       NULL,              /* Параметр задачи */
-      1,                 /* Приоритет задачи */
+      2,                 /* Приоритет задачи */
       NULL,              /* Идентификатор задачи, чтобы ее можно было отслеживать */
       1);                /* Ядро для выполнения задачи (1) */
-
-  // xTaskCreatePinnedToCore(
-  //     send_can,        /* Обновление  */
-  //     "Task_send_can", /* Название задачи */
-  //     2048,            /* Размер стека задачи */
-  //     NULL,            /* Параметр задачи */
-  //     2,               /* Приоритет задачи */
-  //     NULL,            /* Идентификатор задачи, чтобы ее можно было отслеживать */
-  //     1);              /* Ядро для выполнения задачи (1) */
 
   xTaskCreatePinnedToCore(
       uiTick,        /* Обновление  */
       "Task_uiTick", /* Название задачи */
       4096,          /* Размер стека задачи */
       NULL,          /* Параметр задачи */
-      2,             /* Приоритет задачи */
+      1,             /* Приоритет задачи */
       NULL,          /* Идентификатор задачи, чтобы ее можно было отслеживать */
       1);            /* Ядро для выполнения задачи (1) */
+
+  xTaskCreatePinnedToCore(
+      send_CAN,       /* Обновление  */
+      "Task_sendCAN", /* Название задачи */
+      4096,           /* Размер стека задачи */
+      NULL,           /* Параметр задачи */
+      0,              /* Приоритет задачи */
+      NULL,           /* Идентификатор задачи, чтобы ее можно было отслеживать */
+      1);             /* Ядро для выполнения задачи (1) */
+
+  xTaskCreatePinnedToCore(
+      watch_dog_CAN,        /* Обновление  */
+      "Task_watch_dog_CAN", /* Название задачи */
+      2048,                 /* Размер стека задачи */
+      NULL,                 /* Параметр задачи */
+      10,                   /* Приоритет задачи */
+      NULL,                 /* Идентификатор задачи, чтобы ее можно было отслеживать */
+      1);                   /* Ядро для выполнения задачи (1) */
+
+  canFrame.identifier = PGN_SEND_ON_EVO; // идентификатор посылки в кан шину: включение блока ево
+  canFrame.extd = 1;
+  canFrame.data_length_code = 8;
 
   // подключаем конструктор и запускаем
   ui.uploadAuto(0);   // выключить автозагрузку
   ui.deleteAuto(0);   // выключить автоудаление
   ui.downloadAuto(0); // выключить автоскачивание
   ui.renameAuto(0);   // выключить автопереименование
-  ui.attachBuild(buildPage1);
-  ui.attach(actionPage1);
+  ui.attachBuild(buildPage);
+  ui.attach(actionPage);
   ui.start();
   ui.enableOTA(loginOTA, passwordOTA);
 }
 
 void loop()
 {
+  ui.tick();
+  maindisplay->setData(data_can);
 
-  // You can set custom timeout, default is 1000
-  if (ESP32Can.readFrame(rxFrame, 0))
+  if (ESP32Can.readFrame(rxFrame, 100))
   {
+    can_ok = TRUE;
     analise_can_id(rxFrame);
   }
 
-  maindisplay->updateData(data_can);
+  if (ESP32Can.busErrCounter() > 94)
+  {
+    log_e("Error: %d", ESP32Can.busErrCounter());
+    ESP32Can.end();
+  }
 
-  if (data_can.state)
-    data_can.levelEconomicalDriving = calculator(data_can);
+  if (counter_lost_can_EVO > TIME_LOST_CAN)
+  {
+    can_ok = FALSE;
+  }
+
+  if (millis() > time_touch)
+  {
+    if (touch.getTouch(&touchX, &touchY, &gesture))
+    {
+      if (flag_touch && gesture != GESTURE::None)
+      {
+        // log_e("Gesture %0x %0x %0x", touchX, touchY, gesture);
+        flag_touch = FALSE;
+        if (gesture == GESTURE::SlideDown)
+        {
+          screenNumber < NUMBER_SCREEN ? screenNumber++ : screenNumber = 0;
+          time_touch = millis() + PAUSE_TOUCH_ON;
+        }
+        else if (gesture == GESTURE::SlideUp)
+        {
+          screenNumber > 0 ? screenNumber-- : screenNumber = NUMBER_SCREEN;
+          time_touch = millis() + PAUSE_TOUCH_ON;
+        }
+        else if (gesture == GESTURE::LongPress)
+        {
+          if (maindisplay->getScreenNowShow() == TFT_240_240::ButtonOn)
+            if ((touchX > 100 && touchX < 160) && (touchY > 100 && touchY < 150))
+            {
+              gas_on = !gas_on;
+              time_touch = millis() + 20 * PAUSE_TOUCH_ON;
+              if (can_ok && millis() > 10000)
+              {
+                for (int i = 0; i < 7; i++)
+                  canFrame.data[i] = 0;
+                
+                canFrame.data[0] = gas_on;
+                canFrame.identifier = PGN_SEND_ON_EVO; // идентификатор посылки в кан шину: включение газового блока EVO PLUS NEW
+                ESP32Can.writeFrame(canFrame, 100);
+              }
+            }
+        }
+      }
+    }
+    else
+      flag_touch = TRUE;
+  }
+  //   индикация отсутствия данных от газового блока EVO PLUS NEW
+  if (can_ok == FALSE)
+  {
+    maindisplay->setScreenNumber(TFT_240_240::screen::EVOLost);
+    data_can.distLPG.begin = data_can.distance;
+  }
+  else
+    maindisplay->setScreenNumber(screenNumber);
 }
 
 void analise_can_id(CanFrame &frame)
 {
+  // log_e("Frame received %03X: %03X", frame.identifier, frame.data);
+
   unsigned long PGN = frame.identifier;
   // PGN >>= 8;
   // PGN &= ~(0xff0000);
@@ -103,6 +157,7 @@ void analise_can_id(CanFrame &frame)
   {
   case PGN1:
     data_can.state = frame.data[0];
+    gas_on = frame.data[0];
     data_can.cngDieselReduction = frame.data[1];
     data_can.ACC = frame.data[4]; // нажатие педали акселератора 0-100%
     data_can.cngInjectionTime = frame.data[2];
@@ -138,12 +193,10 @@ void analise_can_id(CanFrame &frame)
     data_can.wheelSpeed = (frame.data[1] | frame.data[2] << 8) / 256; // км/час
     data_can.cruise = (frame.data[6] >> 5);
     counter_lost_can_vehicle = 0;
-    if (data_can.vehicleType == "FMS")
-      data_can.distance = (frame.data[0] | frame.data[1] << 8 | frame.data[2] << 16 | frame.data[3] << 24); // м
     break;
   case PGN6:
-    data_can.rpm = (frame.data[3] | frame.data[4] << 8) / 8; //  об/мин
-    data_can.engineLoad = data_can.engineLoad * (1.0 - K) + K * (frame.data[2] - 125);
+    if (data_can.vehicleType == "FMS")
+      data_can.distance = (frame.data[0] | frame.data[1] << 8 | frame.data[2] << 16 | frame.data[3] << 24); // м
     counter_lost_can_vehicle = 0;
     break;
   case PGN7:
@@ -151,7 +204,8 @@ void analise_can_id(CanFrame &frame)
     counter_lost_can_vehicle = 0;
     break;
   case PGN8:
-    data_can.engineLoad = (frame.data[0] | frame.data[1] << 8);
+    data_can.engineLoad = (frame.data[2]) - 125;
+    data_can.rpm = (frame.data[3] | frame.data[4] << 8) / 8; //  об/мин
     counter_lost_can_vehicle = 0;
     break;
   case PGN9:
@@ -174,14 +228,17 @@ void analise_can_id(CanFrame &frame)
     data_can.vehicleWeight = (frame.data[1] | frame.data[2] << 8);
     counter_lost_can_vehicle = 0;
     break;
+  case PGN13:
+    data_can.lls = lls_tarring(frame.data[4] | frame.data[5] << 8);
+    data_can.full_tank = frame.data[7] * 10;
+    break;
   default:
     break;
   }
 }
 
-int calculator(Can_Data &data)
+int calculation_economical_driving(Can_Data &data)
 {
-  DEBUG("ACC: " + String(data.ACC) + "| RPM: " + String(data.rpm));
 
   int map_acc = constrain(data.ACC / 3, 0, COLUM);
   int map_rpm = constrain((data.rpm - 500) / 100, 0, LINE);
@@ -189,16 +246,28 @@ int calculator(Can_Data &data)
   if (data.rpm < 500)
     map_rpm = 0;
 
-  // Serial.printf("Hor: %d | Vert: %d | MAP: %d\n", map_acc, map_rpm, map_ACC_RPM[map_rpm][map_acc]);
-  uint8_t level = constrain((1.0 - K) * ((float)level) + K * ((float)map_ACC_RPM[map_rpm][map_acc]), 0, 100);
+  levelEconomicalDriving = constrain((1.0 - K) * (levelEconomicalDriving) + K * (map_ACC_RPM[map_rpm][map_acc]), 0.0, 100.0);
+  // DEBUG("ACC: " + String(data.ACC) + "| RPM: " + String(data.rpm) + " Level: " + levelEconomicalDriving);
 
-  return level;
+  return levelEconomicalDriving;
 }
 
-void set_mask_filtr_can_29()
+int calculation_average_gasconsumption(Can_Data &data)
 {
-  twai_generate_filter(*FILTR_ID.begin(), *FILTR_ID.end(), &f_config);
-};
+  int res = 0;
+  res = data.cngTripFuel * 100.0 / data.distLPG.result;
+  return res;
+}
+
+int calculation_gas_mileage(Can_Data &data)
+{
+  int res{};
+  if (data.average_gasconsumption && data.cngTripFuel)
+    res = data.cngLevel * data.tankVolume / (2 * KG_TO_M3 * data.average_gasconsumption);
+  else
+    res = data.cngLevel * data.tankVolume / (2 * KG_TO_M3 * 20);
+  return res;
+}
 
 bool parse_csv(uint8_t (&map)[LINE][COLUM], const String &name)
 {
@@ -208,14 +277,14 @@ bool parse_csv(uint8_t (&map)[LINE][COLUM], const String &name)
   if (!FileSys.exists(patch))
   {
     File file = FileSys.open(patch, FILE_READ);
-    DEBUG("Map " + String(name) + " not found\n");
+    log_e("Map %s not found", String(name));
     return false;
   }
 
   File file = FileSys.open(patch, FILE_READ);
   if (!file)
   {
-    DEBUG("Failed to open map " + String(name) + "\n");
+    log_e("Failed to open map %s", String(name));
     return false;
   }
 
@@ -301,7 +370,7 @@ bool parse_csv(uint8_t (&map)[LINE][COLUM], const String &name)
     {
       auto message = file.readString();
       if (!fileCopy.print(message))
-        DEBUG(COPY_MAP_ACC_RPM_NAME + "\t- ошибка записи");
+        log_e("%s\t- ошибка записи", COPY_MAP_ACC_RPM_NAME);
     }
   }
   file.close();
@@ -330,7 +399,28 @@ void uiTick(void *pvParameters)
 {
   for (;;)
   {
-    ui.tick();
+    if (data_can.state)
+    {
+      data_can.levelEconomicalDriving = calculation_economical_driving(data_can);
+      if ((data_can.distLPG.begin == 0 && data_can.distance != 0) || data_can.rpm < 600)
+      {
+        data_can.distLPG.begin = data_can.distance;
+        data_can.average_gasconsumption = 0.0;
+      }
+      data_can.distLPG.result = (data_can.distance - data_can.distLPG.begin); // вычисление пробега в поездке (после включения зажигания)
+    }
+    else
+      data_can.distLPG.begin = data_can.distance;
+
+    if (data_can.distLPG.result > 1000)
+    {
+      data_can.average_gasconsumption = (1 - 5 * K) * data_can.average_gasconsumption + 5 * K * calculation_average_gasconsumption(data_can);
+      data_can.distLPG.gas_mileage = (1 - K) * (data_can.distLPG.gas_mileage) + K * (calculation_gas_mileage(data_can));
+    }
+    if (data_can.average_gasconsumption > 25.5)
+      data_can.average_gasconsumption = 25.5;
+    if (data_can.distLPG.gas_mileage > 2550.0)
+      data_can.distLPG.gas_mileage = 2550.0;
     vTaskDelay(pdMS_TO_TICKS(PERIOD_UPDATE_UI));
   }
   vTaskDelete(NULL);
@@ -341,73 +431,41 @@ void update_TFT(void *pvParameters)
 {
   for (;;)
   {
-    if (touch.getTouch(&touchX, &touchY, &gesture))
-    {
-      // Serial.printf("X:%d,Y:%d,gesture:%x\n", touchX, touchY, gesture);
-      gesture == 1 ? screenNumber++ : screenNumber;
-      gesture == 2 ? screenNumber-- : screenNumber;
-
-      if (maindisplay->getScreenNowShow() == 0)
-      {
-        if ((touchX > 100 && touchX < 140) && (touchY > 100 && touchY < 10))
-          data_can.state ? touchOn = false : touchOn = true;
-      }
-    }
-    // Serial.printf("Counter lost can EVO: %d\n", counter_lost_can_EVO);
-    // Serial.printf("TouchDown: %d\n", touchDown);
-    // Serial.printf("TouchUp: %d\n", touchUp);
-
-    if (screenNumber > 3)
-      screenNumber = 0;
-    if (screenNumber < 0)
-      screenNumber = 3;
-
-    // Serial.printf("ScreenNumber: %d\n", screenNumber);
-
-    //   индикация отсутствия данных от газового блока
-    if (counter_lost_can_EVO++ > 200)
-    {
-      maindisplay->updateScreen(4);
-      data_can.distLPG.begin = data_can.distance;
-    }
-    else
-    {
-      if (data_can.state)
-      {
-        if (data_can.distLPG.begin == 0 && data_can.distance != 0)
-          data_can.distLPG.begin = data_can.distance;
-        data_can.distLPG.result = (data_can.distance - data_can.distLPG.begin); // вычисление пробега в поездке (после включения зажигания)
-      }
-      else
-        data_can.distLPG.begin = data_can.distance;
-      maindisplay->updateScreen(screenNumber);
-    }
+    maindisplay->update();
     vTaskDelay(pdMS_TO_TICKS(PERIOD_UPDATE_TFT));
   }
   vTaskDelete(NULL);
 }
 
-// отправка данных в кан-шину
-void send_can(void *pvParameters)
+// отправка сообщения в КАН шину
+void send_CAN(void *pvParameters)
 {
   for (;;)
   {
-    CanFrame obdFrame{};
-    obdFrame.identifier = 0x18FFFABB; // Default OBD2 address;
-    obdFrame.extd = 1;
-    obdFrame.data_length_code = 8;
+    if (can_ok && millis() > 10000)
+    {
+      canFrame.identifier = PGN_SEND_DATA; // идентификатор посылки в кан шину: данные для мониторинга
+      for (int i = 0; i < 7; i++)
+        canFrame.data[i] = 0;
+      
+      canFrame.data[0] = data_can.levelEconomicalDriving;
+      canFrame.data[1] = data_can.average_gasconsumption * 10;
+      canFrame.data[2] = data_can.distLPG.gas_mileage / 10;
+      canFrame.data[3] = data_can.tankVolume / 10;
+      ESP32Can.writeFrame(canFrame, 50);
+    }
+    vTaskDelay(pdMS_TO_TICKS(100));
+  }
+  vTaskDelete(NULL);
+}
 
-    obdFrame.data[0] = 0xAA;
-    obdFrame.data[1] = 0xAA;
-    obdFrame.data[2] = 0xAA;
-    obdFrame.data[3] = 0xAA; // Best to use 0xAA (0b10101010) instead of 0
-    obdFrame.data[4] = 0xAA; // CAN works better this way as it needs
-    obdFrame.data[5] = 0xAA; // to avoid bit-stuffing
-    obdFrame.data[6] = 0xAA;
-    obdFrame.data[7] = touchOn;
-    // // Accepts both pointers and references
-    ESP32Can.writeFrame(obdFrame); // timeout defaults to 1 ms
-    vTaskDelay(pdMS_TO_TICKS(TIME_SEND_CAN));
+void watch_dog_CAN(void *pvParameters)
+{
+  for (;;)
+  {
+    counter_lost_can_vehicle++;
+    counter_lost_can_EVO++;
+    vTaskDelay(pdMS_TO_TICKS(1000));
   }
   vTaskDelete(NULL);
 }
@@ -415,22 +473,18 @@ void send_can(void *pvParameters)
 void wifiInit()
 {
   WiFi.mode(WIFI_AP);
-  DEBUG("\nWiFi start");
   WiFi.softAP(ssid, password, 1, 0, 2);
-  DEBUG(WiFi.softAPIP()); // по умолч. 192.168.4.1
 }
 
 // конструктор страницы
-void buildPage1()
+void buildPage()
 {
   GP.BUILD_BEGIN(800);
   GP.THEME(GP_DARK);
   GP.GRID_RESPONSIVE(500);
-  GP.UPDATE("style,canSpeed,engineLoad,vehicleType,tankVolume,distance,rpm,oilFuelRate,wheelSpeed,vehicleWeight,airTemper,engineTemper,oilTemper,fuelTemper,exhaustGasTemper,state,acc,cngInjectionTime,cngIstValue,cngRailPressure,cngTurboPressure,cngLevel,cngRailPressure,cngWaterTemperature,cngRailTemperature,cngTripFuel,cngTotalFuelUsed,cngDieselReduction,error");
-  GP.TITLE("Дисплей EVO", "");
+  GP.UPDATE("style,canSpeed,engineLoad,vehicleType,tankVolume,distance,rpm,oilFuelRate,wheelSpeed,vehicleWeight,airTemper,engineTemper,oilTemper,fuelTemper,exhaustGasTemper,state,acc,cngInjectionTime,cngIstValue,cngRailPressure,cngTurboPressure,cngLevel,cngRailPressure,cngWaterTemperature,cngRailTemperature,cngTripFuel,cngTotalFuelUsed,cngDieselReduction,error,busErrCounter");
+  GP.TITLE("Дисплей EVO | " + VER, "");
   GP.NAV_TABS("Телеметрия,Настройка");
-  // GP.FORM_BEGIN("");
-  // GP.FORM_BEGIN();
   GP.NAV_BLOCK_BEGIN();
   M_BOX(GP.LABEL("Экономия дизельного топлива, %", "", GP_GRAY_B, 0, 1); GP.LABEL("-", "style", GP_GRAY_B, 0, 1););
   M_GRID(
@@ -461,6 +515,7 @@ void buildPage1()
           M_BOX(GP.LABEL("T газ °C", "", GP_GRAY_B, 0, 0); GP.LABEL("-", "cngRailTemperature"););
           M_BOX(GP.LABEL("Расход газ, кг", "", GP_GRAY_B, 0, 0); GP.LABEL("-", "cngTripFuel"););
           M_BOX(GP.LABEL("Расход итого, кг", "", GP_GRAY_B, 0, 0); GP.LABEL("-", "cngTotalFuelUsed"););
+          M_BOX(GP.LABEL("Счетчик кан ошибок", "", GP_GRAY_B, 0, 0); GP.LABEL("-", "busErrCounter"););
           M_BOX(GP.LABEL("Флаги EVO", "", GP_GRAY, 0, 1););
           M_BOX(GP.LABEL("-", "error", GP_RED_B, 0, 0););););
   GP.NAV_BLOCK_END();
@@ -478,18 +533,19 @@ void buildPage1()
   GP.BUILD_END();
 }
 
-void actionPage1()
+void actionPage()
 {
   if (ui.update())
   {
     ui.updateInt("canSpeed", data_can.canSpeed);
     ui.updateString("vehicleType", data_can.vehicleType);
     ui.updateInt("tankVolume", data_can.tankVolume);
+    ui.updateInt("busErrCounter", ESP32Can.busErrCounter());
 
-    if (counter_lost_can_EVO < 50)
+    if (counter_lost_can_EVO < TIME_LOST_CAN * 2)
     {
       String str = data_can.state ? "Газ" : "Дт";
-      auto t = calculator(data_can);
+      auto t = data_can.levelEconomicalDriving;
       ui.updateInt("style", t);
       ui.updateString("state", str);
       ui.updateInt("acc", data_can.ACC);
@@ -525,10 +581,10 @@ void actionPage1()
       ui.updateString("error", str);
     }
 
-    if (counter_lost_can_vehicle++ < 50)
+    if (can_ok)
     {
-      int d = data_can.distance / 1000;
-      ui.updateInt("distance", d);
+      float d = data_can.distLPG.result / 1000.0;
+      ui.updateFloat("distance", d);
       ui.updateInt("rpm", data_can.rpm);
       ui.updateFloat("oilFuelRate", data_can.oilFuelRate / 20.0, 1);
       ui.updateInt("wheelSpeed", data_can.wheelSpeed);
@@ -604,18 +660,29 @@ String getErrorString(uint8_t err[])
   return error;
 }
 
-void twai_generate_filter(uint16_t min, uint16_t max, twai_filter_config_t *filter)
+int lls_tarring(int data)
 {
+  std::map<int, int> table_taring{{1, 0}, {107, 200}, {344, 400}, {572, 600}, {800, 800}, 
+                                  {988, 1000}, {1193, 1200}, {1400, 1400}, {1606, 1600}, 
+                                  {1803, 1800}, {2006, 2000}, {2206, 2200}, {2407, 2400}, 
+                                  {2608, 2600}, {2804, 2800}, {3005, 3000}, {3202, 3200}, 
+                                  {3423, 3400}, {3600, 3600}, {3812, 3800}, {3863, 3850}};
+  auto iterator = table_taring.begin();
 
-  uint32_t mask[2] = {0, 0};
-
-  for (uint16_t i = min; i < max; i++)
+  for (int i = 0; i < table_taring.size(); i++)
   {
-    mask[0] &= i;
-    mask[1] &= ~i;
+    if (data > iterator->first)
+      iterator++;
+    else
+    {
+      auto min = iterator;
+      iterator++;
+      auto max = iterator;
+      return map(data, min->first, max->first, min->second, max->second);
+    }
   }
-
-  filter->acceptance_mask = ~((mask[0] | mask[1]) << 21);
-  filter->acceptance_code = (min & (mask[0] | mask[1])) << 21;
-  filter->single_filter = true;
-}
+  if (data < 4096)
+    return 3900;
+  else
+    return -1;
+};
