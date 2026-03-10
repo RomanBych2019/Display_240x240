@@ -1,10 +1,9 @@
 #include "main.h"
 #include <map>
 
+
 void setup(void)
 {
-
-  Serial.begin(115200);
 
   if (!FileSys.begin(FORMAT_LITTLEFS_IF_FAILED))
   {
@@ -15,6 +14,7 @@ void setup(void)
 
   touch.begin();
   wifiInit();
+  Serial.begin(115200);
 
   if (!parse_csv(map_ACC_RPM, MAP_ACC_RPM_NAME))
     parse_csv(map_ACC_RPM, COPY_MAP_ACC_RPM_NAME);
@@ -84,16 +84,12 @@ void loop()
     analise_can_id(rxFrame);
   }
 
-  if (ESP32Can.busErrCounter() > 94)
-  {
-    log_e("Error: %d", ESP32Can.busErrCounter());
-    ESP32Can.end();
-  }
-
+  #ifdef EVO_LOST
   if (counter_lost_can_EVO > TIME_LOST_CAN)
   {
     can_ok = FALSE;
   }
+  #endif
 
   if (millis() > time_touch)
   {
@@ -124,7 +120,7 @@ void loop()
               {
                 for (int i = 0; i < 7; i++)
                   canFrame.data[i] = 0;
-                
+
                 canFrame.data[0] = gas_on;
                 canFrame.identifier = PGN_SEND_ON_EVO; // идентификатор посылки в кан шину: включение газового блока EVO PLUS NEW
                 ESP32Can.writeFrame(canFrame, 100);
@@ -136,6 +132,7 @@ void loop()
     else
       flag_touch = TRUE;
   }
+
   //   индикация отсутствия данных от газового блока EVO PLUS NEW
   if (can_ok == FALSE)
   {
@@ -148,9 +145,10 @@ void loop()
 
 void analise_can_id(CanFrame &frame)
 {
+  unsigned long PGN = frame.identifier;
+  // if (PGN == PGN1)
   // log_e("Frame received %03X: %03X", frame.identifier, frame.data);
 
-  unsigned long PGN = frame.identifier;
   // PGN >>= 8;
   // PGN &= ~(0xff0000);
   switch (PGN)
@@ -447,14 +445,14 @@ void send_CAN(void *pvParameters)
       canFrame.identifier = PGN_SEND_DATA; // идентификатор посылки в кан шину: данные для мониторинга
       for (int i = 0; i < 7; i++)
         canFrame.data[i] = 0;
-      
+
       canFrame.data[0] = data_can.levelEconomicalDriving;
       canFrame.data[1] = data_can.average_gasconsumption * 10;
       canFrame.data[2] = data_can.distLPG.gas_mileage / 10;
       canFrame.data[3] = data_can.tankVolume / 10;
       ESP32Can.writeFrame(canFrame, 50);
     }
-    vTaskDelay(pdMS_TO_TICKS(100));
+    vTaskDelay(pdMS_TO_TICKS(500));
   }
   vTaskDelete(NULL);
 }
@@ -662,11 +660,7 @@ String getErrorString(uint8_t err[])
 
 int lls_tarring(int data)
 {
-  std::map<int, int> table_taring{{1, 0}, {107, 200}, {344, 400}, {572, 600}, {800, 800}, 
-                                  {988, 1000}, {1193, 1200}, {1400, 1400}, {1606, 1600}, 
-                                  {1803, 1800}, {2006, 2000}, {2206, 2200}, {2407, 2400}, 
-                                  {2608, 2600}, {2804, 2800}, {3005, 3000}, {3202, 3200}, 
-                                  {3423, 3400}, {3600, 3600}, {3812, 3800}, {3863, 3850}};
+  std::map<int, int> table_taring{{1, 0}, {107, 200}, {344, 400}, {572, 600}, {800, 800}, {988, 1000}, {1193, 1200}, {1400, 1400}, {1606, 1600}, {1803, 1800}, {2006, 2000}, {2206, 2200}, {2407, 2400}, {2608, 2600}, {2804, 2800}, {3005, 3000}, {3202, 3200}, {3423, 3400}, {3600, 3600}, {3812, 3800}, {3863, 3850}};
   auto iterator = table_taring.begin();
 
   for (int i = 0; i < table_taring.size(); i++)

@@ -13,7 +13,9 @@
 #include <GyverPortal.h>
 #include <ESP32-TWAI-CAN.hpp>
 
-//#define WITH_LLS    //  дисплей с выводом уровня топлива
+// #define WITH_LLS    //  дисплей с выводом уровня топлива
+// #define EVO_LOST
+
 
 #define CAN_RX GPIO_NUM_20
 #define CAN_TX GPIO_NUM_21
