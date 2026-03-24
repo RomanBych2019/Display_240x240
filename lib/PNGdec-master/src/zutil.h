@@ -34,7 +34,7 @@
 #endif
 
 #ifndef local
-#  define local static
+#  define loc_can static
 #endif
 /* since "static" is used to mean two completely different things in C, we
    define "local" for the non-static meaning of "static", for readability

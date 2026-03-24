@@ -31,11 +31,11 @@ struct Can_Data
     uint8_t verFMlow;            //   Version FW Low
 
     uint32_t rpm = 0;         //  Обороты двигателя
-    uint32_t wheelSpeed = 0;  //  Скорость автомобиля
-    uint32_t oilFuelRate = 0; //  Мгновенный расход ДТ литр/час
-    uint32_t engineLoad = 0;  //  нагрузка двигатель
-    uint32_t cruise = 0;      //  круиз - вкл - 1, выкл - 0
-    uint32_t distance = 0;    //  пробег автомобиля
+    float wheelSpeed = 0;  //  Скорость автомобиля
+    float oilFuelRate = 0; //  Мгновенный расход ДТ литр/час
+    float engineLoad = 0;  //  нагрузка двигатель
+    bool cruise = 0;      //  круиз - вкл - 1, выкл - 0
+    float distance = 0;    //  пробег автомобиля, метр
     int32_t airTemper;        //  температура воздуха
     int32_t oilTemper;        //  температура масла
     int32_t engineTemper;     //  температура двигателя
@@ -59,18 +59,23 @@ const uint32_t PGN1 = 0x18FFF0BB;  // газ
 const uint32_t PGN2 = 0x18FFF1BB;  // газ
 const uint32_t PGN3 = 0x18FFFBBB;  // газ - ошибки
 const uint32_t PGN4 = 0x18FFF8BB;  // газ
+
 const uint32_t PGN5 = 0x18FEF100;  // скорость, круиз-контроль,
 const uint32_t PGN6 = 0x18FEC100;  // пробег авто в J1939
 const uint32_t PGN7 = 0x18FEF200;  // мгновенный расход ДТ авто в J1939
-const uint32_t PGN8 = 0x0CF00400;  // нагрузка на двигатель в J1939
+
+const uint32_t PGN8 = 0x0CF00400;  // нагрузка на двигатель в J1939, RPM в J1939
 const uint32_t PGN9 = 0x18FEC1EE;  // пробег авто в SHAKMAN
 const uint32_t PGN10 = 0x18FEF600; // температура воздуха, выхлопных газов в J1939
 const uint32_t PGN11 = 0x18FEEE00; // температура ОЖ, масла, топлива в J1939
 const uint32_t PGN12 = 0x18FEEA2F; // вес в J1939
-const uint32_t PGN13 = 0x18FEEA00; //  данные от терминала Смарт
+const uint32_t PGN13 = 0x18FEEA00; // данные от терминала Смарт
+static constexpr uint32_t PGN14 = 0x18FFFAA1UL;          // входящее CAN сообщение о статусе и токе потребления соленоидов
+
 
 const uint32_t PGN_SEND_ON_EVO = 0x18FFEEDD; // отправка нажатия кнопки включения/выключения газа
 const uint32_t PGN_SEND_DATA = 0x18FFFEDD;   // отправка диагностической информации для мониторинга
+
 
 const std::set<uint32_t> FILTR_ID{PGN1, PGN2, PGN3, PGN4,
                                   PGN5, PGN6, PGN7, PGN8,

@@ -1,20 +1,33 @@
 #include "main.h"
+#include "WebPortal.h"
 #include <map>
+#include <ArduinoJson.h>
 
+#include "DisplayConfig.h"
+
+DisplayConfig g_displayConfig = {
+    .pages = {
+        {DisplayPageId::CNG, "cng", "CNG", true, 0, false},
+        {DisplayPageId::ParamEVO, "paramEvo", "Параметры EVO", true, 1, false},
+        {DisplayPageId::ButtonOn, "button", "Кнопка газ/дт", true, 2, false},
+        {DisplayPageId::LSLevel, "lls", "Уровень топлива", true, 3, false},
+        {DisplayPageId::ValveTank, "valve", "Соленоиды", true, 4, false},
+        {DisplayPageId::EVOLost, "evoLost", "EVO Lost", true, 255, true},
+    }};
 
 void setup(void)
 {
 
-  if (!FileSys.begin(FORMAT_LITTLEFS_IF_FAILED))
+  Serial.begin(115200);
+
+  if (!LittleFS.begin(FORMAT_LITTLEFS_IF_FAILED))
   {
-    while (1)
-      yield(); // Stay here twiddling thumbs waiting
+    Serial.println("LittleFS mount failed");
   }
-  maindisplay = new TFT_240_240(FileSys);
+
+  maindisplay = new TFT_240_240();
 
   touch.begin();
-  wifiInit();
-  Serial.begin(115200);
 
   if (!parse_csv(map_ACC_RPM, MAP_ACC_RPM_NAME))
     parse_csv(map_ACC_RPM, COPY_MAP_ACC_RPM_NAME);
@@ -25,7 +38,7 @@ void setup(void)
   xTaskCreatePinnedToCore(
       update_TFT,        /* Обновление */
       "Task_update_TFT", /* Название задачи */
-      4096,              /* Размер стека задачи */
+      8192,              /* Размер стека задачи */
       NULL,              /* Параметр задачи */
       2,                 /* Приоритет задачи */
       NULL,              /* Идентификатор задачи, чтобы ее можно было отслеживать */
@@ -34,7 +47,7 @@ void setup(void)
   xTaskCreatePinnedToCore(
       uiTick,        /* Обновление  */
       "Task_uiTick", /* Название задачи */
-      4096,          /* Размер стека задачи */
+      8192,          /* Размер стека задачи */
       NULL,          /* Параметр задачи */
       1,             /* Приоритет задачи */
       NULL,          /* Идентификатор задачи, чтобы ее можно было отслеживать */
@@ -58,38 +71,28 @@ void setup(void)
       NULL,                 /* Идентификатор задачи, чтобы ее можно было отслеживать */
       1);                   /* Ядро для выполнения задачи (1) */
 
-  canFrame.identifier = PGN_SEND_ON_EVO; // идентификатор посылки в кан шину: включение блока ево
-  canFrame.extd = 1;
-  canFrame.data_length_code = 8;
-
-  // подключаем конструктор и запускаем
-  ui.uploadAuto(0);   // выключить автозагрузку
-  ui.deleteAuto(0);   // выключить автоудаление
-  ui.downloadAuto(0); // выключить автоскачивание
-  ui.renameAuto(0);   // выключить автопереименование
-  ui.attachBuild(buildPage);
-  ui.attach(actionPage);
-  ui.start();
-  ui.enableOTA(loginOTA, passwordOTA);
+  loadDisplayConfig();
+  maindisplay->setDisplayConfig(g_displayConfig);
+  delay(1000);
+  maindisplay->showPage(DisplayPageId::ButtonOn);
+  webPortal.begin();
 }
 
 void loop()
 {
-  ui.tick();
-  maindisplay->setData(data_can);
+  webPortal.tick();
+
+  Can_Data dataSnap = snapshotDataCan();
+  maindisplay->setData(dataSnap, valves);
 
   if (ESP32Can.readFrame(rxFrame, 100))
   {
-    can_ok = TRUE;
+    portENTER_CRITICAL(&dataMux);
+    can_ok = true;
+    portEXIT_CRITICAL(&dataMux);
+
     analise_can_id(rxFrame);
   }
-
-  #ifdef EVO_LOST
-  if (counter_lost_can_EVO > TIME_LOST_CAN)
-  {
-    can_ok = FALSE;
-  }
-  #endif
 
   if (millis() > time_touch)
   {
@@ -97,78 +100,104 @@ void loop()
     {
       if (flag_touch && gesture != GESTURE::None)
       {
-        // log_e("Gesture %0x %0x %0x", touchX, touchY, gesture);
-        flag_touch = FALSE;
+        flag_touch = false;
+
         if (gesture == GESTURE::SlideDown)
         {
-          screenNumber < NUMBER_SCREEN ? screenNumber++ : screenNumber = 0;
+          // portENTER_CRITICAL(&dataMux);
+          maindisplay->nextUserPage();
+          // portEXIT_CRITICAL(&dataMux);
           time_touch = millis() + PAUSE_TOUCH_ON;
         }
         else if (gesture == GESTURE::SlideUp)
         {
-          screenNumber > 0 ? screenNumber-- : screenNumber = NUMBER_SCREEN;
+          // portENTER_CRITICAL(&dataMux);
+          maindisplay->prevUserPage();
+          // portEXIT_CRITICAL(&dataMux);
           time_touch = millis() + PAUSE_TOUCH_ON;
         }
         else if (gesture == GESTURE::LongPress)
         {
-          if (maindisplay->getScreenNowShow() == TFT_240_240::ButtonOn)
+          if (maindisplay->getScreenNowShow() == static_cast<int>(DisplayPageId::ButtonOn))
+          {
             if ((touchX > 100 && touchX < 160) && (touchY > 100 && touchY < 150))
             {
-              gas_on = !gas_on;
-              time_touch = millis() + 20 * PAUSE_TOUCH_ON;
-              if (can_ok && millis() > 10000)
-              {
-                for (int i = 0; i < 7; i++)
-                  canFrame.data[i] = 0;
+              bool localGasOn;
+              bool localCanOk;
 
-                canFrame.data[0] = gas_on;
-                canFrame.identifier = PGN_SEND_ON_EVO; // идентификатор посылки в кан шину: включение газового блока EVO PLUS NEW
-                ESP32Can.writeFrame(canFrame, 100);
+              // portENTER_CRITICAL(&dataMux);
+              gas_on = !gas_on;
+              localGasOn = gas_on;
+              localCanOk = can_ok;
+              // portEXIT_CRITICAL(&dataMux);
+
+              time_touch = millis() + 20 * PAUSE_TOUCH_ON;
+
+              if (localCanOk && millis() > 10000)
+              {
+                uint8_t payload[8] = {0};
+                payload[0] = localGasOn ? 1 : 0;
+                sendCanFrame(PGN_SEND_ON_EVO, payload, 8, 100);
               }
             }
+          }
         }
       }
     }
     else
-      flag_touch = TRUE;
+    {
+      flag_touch = true;
+    }
   }
 
-  //   индикация отсутствия данных от газового блока EVO PLUS NEW
-  if (can_ok == FALSE)
+  bool localCanOk;
+  uint8_t localScreen;
+
+  portENTER_CRITICAL(&dataMux);
+  localCanOk = can_ok;
+  // localScreen = screenNumber;
+  portEXIT_CRITICAL(&dataMux);
+
+  if (!localCanOk)
   {
-    maindisplay->setScreenNumber(TFT_240_240::screen::EVOLost);
+    // maindisplay->setScreenNumber(static_cast<int>(DisplayPageId::EVOLost));
+
+    portENTER_CRITICAL(&dataMux);
     data_can.distLPG.begin = data_can.distance;
+    portEXIT_CRITICAL(&dataMux);
   }
   else
-    maindisplay->setScreenNumber(screenNumber);
+  {
+    // maindisplay->setScreenNumber(localScreen);
+  }
 }
 
 void analise_can_id(CanFrame &frame)
 {
   unsigned long PGN = frame.identifier;
-  // if (PGN == PGN1)
-  // log_e("Frame received %03X: %03X", frame.identifier, frame.data);
 
-  // PGN >>= 8;
-  // PGN &= ~(0xff0000);
+  portENTER_CRITICAL(&dataMux);
+
   switch (PGN)
   {
   case PGN1:
     data_can.state = frame.data[0];
     gas_on = frame.data[0];
     data_can.cngDieselReduction = frame.data[1];
-    data_can.ACC = frame.data[4]; // нажатие педали акселератора 0-100%
+    data_can.ACC = frame.data[4];
     data_can.cngInjectionTime = frame.data[2];
     data_can.cngTurboPressure = frame.data[3];
     data_can.cngRailPressure = frame.data[5];
     data_can.cngRailTemperature = frame.data[6];
     counter_lost_can_EVO = 0;
     break;
+
   case PGN2:
     data_can.cngLevel = frame.data[6];
     data_can.cngWaterTemperature = frame.data[7];
     counter_lost_can_EVO = 0;
     break;
+
   case PGN3:
     data_can.errorEVO[0] = frame.data[0];
     data_can.errorEVO[1] = frame.data[1];
@@ -181,80 +210,103 @@ void analise_can_id(CanFrame &frame)
     data_can.cruise = frame.data[3] & B00000001;
     counter_lost_can_EVO = 0;
     break;
+
   case PGN4:
     data_can.cngIstValue = frame.data[3];
     data_can.cngTripFuel = frame.data[0] | frame.data[1] << 8 | frame.data[2] << 16;
-    data_can.cngTotalFuelUsed = (frame.data[4] | frame.data[5] << 8 | frame.data[6] << 16 | frame.data[7] << 24);
+    data_can.cngTotalFuelUsed = frame.data[4] | frame.data[5] << 8 | frame.data[6] << 16 | frame.data[7] << 24;
     counter_lost_can_EVO = 0;
     break;
+
   case PGN5:
-    data_can.wheelSpeed = (frame.data[1] | frame.data[2] << 8) / 256; // км/час
-    data_can.cruise = (frame.data[6] >> 5);
+    data_can.wheelSpeed = (frame.data[1] | frame.data[2] << 8) / 256.0f;
+    // log_e("Скорость %d", data_can.wheelSpeed);
     counter_lost_can_vehicle = 0;
     break;
+
   case PGN6:
-    if (data_can.vehicleType == "FMS")
-      data_can.distance = (frame.data[0] | frame.data[1] << 8 | frame.data[2] << 16 | frame.data[3] << 24); // м
+    data_can.distance = (frame.data[0] | frame.data[1] << 8 | frame.data[2] << 16 | frame.data[3] << 24) * 5 / 1000.0f;
+
+    // data_can.engineLoad = frame.data[0];
     counter_lost_can_vehicle = 0;
+
+    // log_e("Пробег %d", data_can.distance);
+
     break;
+
   case PGN7:
-    data_can.oilFuelRate = (frame.data[0] | frame.data[1] << 8);
+    data_can.oilFuelRate = (frame.data[0] | frame.data[1] << 8) * 5 / 200.0f;
+
+    // data_can.airTemper = frame.data[0] - 40;
     counter_lost_can_vehicle = 0;
     break;
+
   case PGN8:
-    data_can.engineLoad = (frame.data[2]) - 125;
-    data_can.rpm = (frame.data[3] | frame.data[4] << 8) / 8; //  об/мин
+    data_can.rpm = (frame.data[3] | frame.data[4] << 8) / 8.0;
     counter_lost_can_vehicle = 0;
     break;
+
   case PGN9:
-    if (data_can.vehicleType == "SHAKMAN")
-      data_can.distance = (frame.data[0] | frame.data[1] << 8 | frame.data[2] << 16 | frame.data[3] << 24); // м
+    data_can.exhaustGasTemper = frame.data[0] | frame.data[1] << 8;
     counter_lost_can_vehicle = 0;
     break;
+
   case PGN10:
-    data_can.airTemper = (frame.data[2]) - 40;                                        // C
-    data_can.exhaustGasTemper = (frame.data[5] | frame.data[6] << 8) * 0.03125 - 273; // C
     counter_lost_can_vehicle = 0;
     break;
+
   case PGN11:
-    data_can.engineTemper = (frame.data[0]) - 40;
-    data_can.fuelTemper = (frame.data[1]) - 40;
+    data_can.engineTemper = frame.data[0] - 40;
+    data_can.fuelTemper = frame.data[1] - 40;
     data_can.oilTemper = (frame.data[2] | frame.data[3] << 8) * 0.03125 - 273;
     counter_lost_can_vehicle = 0;
     break;
+
   case PGN12:
-    data_can.vehicleWeight = (frame.data[1] | frame.data[2] << 8);
+    data_can.vehicleWeight = (frame.data[1] | frame.data[2] << 8) / 2000.0f;
     counter_lost_can_vehicle = 0;
     break;
+
   case PGN13:
     data_can.lls = lls_tarring(frame.data[4] | frame.data[5] << 8);
     data_can.full_tank = frame.data[7] * 10;
     break;
+
+  case PGN14:
+    valves[0].updateState(static_cast<SolenoidHealth>(frame.data[6] & B00000111), frame.data[2]);
+    valves[1].updateState(static_cast<SolenoidHealth>((frame.data[6] >> 4) & B00000111), frame.data[3]);
+    valves[2].updateState(static_cast<SolenoidHealth>((frame.data[7]) & B00000111), frame.data[4]);
+    valves[3].updateState(static_cast<SolenoidHealth>((frame.data[7] >> 4) & B00000111), frame.data[5]);
+    break;
+
   default:
     break;
   }
+
+  portEXIT_CRITICAL(&dataMux);
 }
 
 int calculation_economical_driving(Can_Data &data)
 {
-
-  int map_acc = constrain(data.ACC / 3, 0, COLUM);
-  int map_rpm = constrain((data.rpm - 500) / 100, 0, LINE);
+  int map_acc = constrain(data.ACC / 3, 0, COLUM - 1);
+  int map_rpm = constrain((data.rpm - 500) / 100, 0, LINE - 1);
 
   if (data.rpm < 500)
     map_rpm = 0;
 
-  levelEconomicalDriving = constrain((1.0 - K) * (levelEconomicalDriving) + K * (map_ACC_RPM[map_rpm][map_acc]), 0.0, 100.0);
-  // DEBUG("ACC: " + String(data.ACC) + "| RPM: " + String(data.rpm) + " Level: " + levelEconomicalDriving);
+  levelEconomicalDriving = constrain(
+      (1.0 - K) * levelEconomicalDriving + K * map_ACC_RPM[map_rpm][map_acc],
+      0.0, 100.0);
 
   return levelEconomicalDriving;
 }
 
 int calculation_average_gasconsumption(Can_Data &data)
 {
-  int res = 0;
-  res = data.cngTripFuel * 100.0 / data.distLPG.result;
-  return res;
+  if (data.distLPG.result == 0)
+    return 0;
+
+  return data.cngTripFuel * 100.0 / data.distLPG.result;
 }
 
 int calculation_gas_mileage(Can_Data &data)
@@ -269,110 +321,144 @@ int calculation_gas_mileage(Can_Data &data)
 
 bool parse_csv(uint8_t (&map)[LINE][COLUM], const String &name)
 {
+  const String path = "/" + name;
 
-  String patch = "/" + String(name);
-
-  if (!FileSys.exists(patch))
+  if (!LittleFS.exists(path))
   {
-    File file = FileSys.open(patch, FILE_READ);
-    log_e("Map %s not found", String(name));
+    log_e("Map %s not found", name.c_str());
     return false;
   }
 
-  File file = FileSys.open(patch, FILE_READ);
+  File file = LittleFS.open(path, FILE_READ);
   if (!file)
   {
-    log_e("Failed to open map %s", String(name));
+    log_e("Failed to open map %s", name.c_str());
     return false;
   }
 
-  std::vector<String> v;
+  std::vector<String> lines;
   while (file.available())
-    v.push_back(file.readStringUntil('\n'));
-
+  {
+    String s = file.readStringUntil('\n');
+    s.trim();
+    if (s.length())
+      lines.push_back(s);
+  }
   file.close();
 
-  if (v.empty())
+  if (lines.empty())
+    return false;
+
+  String newVehicleType;
+  int newCanSpeed = 0;
+  int newTankVolume = 0;
+
+  bool hasVehicleType = false;
+  bool hasCanSpeed = false;
+  bool hasTankVolume = false;
+
+  for (const String &st : lines)
   {
+    if (st.startsWith("TypeCan;"))
+    {
+      int pos = st.indexOf(';');
+      if (pos >= 0)
+      {
+        newVehicleType = st.substring(pos + 1);
+        newVehicleType.replace(";", "");
+        hasVehicleType = true;
+      }
+    }
+    else if (st.startsWith("SpeedCan;"))
+    {
+      int pos = st.indexOf(';');
+      if (pos >= 0)
+      {
+        newCanSpeed = st.substring(pos + 1).toInt();
+        hasCanSpeed = true;
+      }
+    }
+    else if (st.startsWith("TankVolume;"))
+    {
+      int pos = st.indexOf(';');
+      if (pos >= 0)
+      {
+        newTankVolume = st.substring(pos + 1).toInt();
+        hasTankVolume = true;
+      }
+    }
+  }
+
+  size_t firstMapLine = 0;
+  while (firstMapLine < lines.size() && !lines[firstMapLine].startsWith("500"))
+    ++firstMapLine;
+
+  if (firstMapLine >= lines.size())
+  {
+    log_e("Map data section not found in %s", name.c_str());
     return false;
   }
 
-  for (auto st : v)
+  memset(map, 0, sizeof(map));
+
+  int row = 0;
+  for (size_t k = firstMapLine; k < lines.size() && row < LINE; ++k, ++row)
   {
-    String d = "TypeCan";
-    if (st.startsWith(d)) // строка co значением типа кан-шины
-    {
-      int end = st.indexOf(';', d.length() + 1);
-      data_can.vehicleType = st.substring(d.length() + 1, end);
-    }
+    const String &s = lines[k];
+    int col = 0;
+    int start = 0;
 
-    d = "SpeedCan";
-    if (st.startsWith(d)) // строка co значением типа кан-шины
+    while (start <= s.length() && col < (COLUM + 1))
     {
-      int end = st.indexOf(';', d.length() + 1);
-      data_can.canSpeed = st.substring(d.length() + 1, end).toInt();
-    }
+      int sep = s.indexOf(';', start);
+      if (sep < 0)
+        sep = s.length();
 
-    d = "TankVolume";
-    if (st.startsWith(d)) // строка co значением объема газовых баллонов
-    {
-      int end = st.indexOf(';', d.length() + 1);
-      data_can.tankVolume = st.substring(d.length() + 1, end).toInt();
-    }
-  }
+      String token = s.substring(start, sep);
+      token.trim();
 
-  while (!v.front().startsWith("500")) // рабочая часть карты должна начинаться с подстроки 500
-  {
-    if (v.size() > 0)
-    {
-      v.erase(v.begin());
-    }
-    else
-    {
-      return false;
-    }
-  }
-
-  int i = 0;
-  int j = 0;
-  for (String s : v)
-  {
-    String d = "";
-    for (auto ch : s)
-      if (ch == ';')
+      if (col > 0)
       {
-        if (j)
-        {
-          map[i][j - 1] = d.toInt();
-        }
-        j++;
-        d = "";
+        int mapCol = col - 1;
+        if (mapCol < COLUM)
+          map[row][mapCol] = static_cast<uint8_t>(constrain(token.toInt(), 0, 255));
       }
-      else
-      {
-        d += ch;
-      }
-    i++;
-    j = 0;
-  }
 
-  file = FileSys.open(patch, FILE_READ);
-  File fileCopy = FileSys.open("/" + COPY_MAP_ACC_RPM_NAME, FILE_READ);
+      ++col;
+      start = sep + 1;
 
-  if (!compare(file, fileCopy))
-  {
-    fileCopy.close();
-    fileCopy = FileSys.open("/" + COPY_MAP_ACC_RPM_NAME, FILE_WRITE);
-    // fileCopy = file;
-    while (file.available())
-    {
-      auto message = file.readString();
-      if (!fileCopy.print(message))
-        log_e("%s\t- ошибка записи", COPY_MAP_ACC_RPM_NAME);
+      if (sep >= s.length())
+        break;
     }
   }
-  file.close();
-  fileCopy.close();
+
+  portENTER_CRITICAL(&dataMux);
+  if (hasVehicleType)
+    data_can.vehicleType = newVehicleType;
+  if (hasCanSpeed)
+    data_can.canSpeed = newCanSpeed;
+  if (hasTankVolume)
+    data_can.tankVolume = newTankVolume;
+  portEXIT_CRITICAL(&dataMux);
+
+  File src = LittleFS.open(path, FILE_READ);
+  if (!src)
+    return true;
+
+  File dst = LittleFS.open("/" + String(COPY_MAP_ACC_RPM_NAME), FILE_WRITE);
+  if (!dst)
+  {
+    src.close();
+    log_e("Failed to open backup map file");
+    return true;
+  }
+
+  while (src.available())
+    dst.write(src.read());
+
+  src.close();
+  dst.close();
+
   return true;
 }
 
@@ -397,31 +483,59 @@ void uiTick(void *pvParameters)
 {
   for (;;)
   {
-    if (data_can.state)
+    Can_Data loc_canDat{};
+
+    portENTER_CRITICAL(&dataMux);
+    loc_canDat = data_can;
+    portEXIT_CRITICAL(&dataMux);
+
+    if (loc_canDat.state)
     {
-      data_can.levelEconomicalDriving = calculation_economical_driving(data_can);
-      if ((data_can.distLPG.begin == 0 && data_can.distance != 0) || data_can.rpm < 600)
+      loc_canDat.levelEconomicalDriving = calculation_economical_driving(loc_canDat);
+
+      if ((loc_canDat.distLPG.begin == 0 && loc_canDat.distance != 0) || loc_canDat.rpm < 600)
       {
-        data_can.distLPG.begin = data_can.distance;
-        data_can.average_gasconsumption = 0.0;
+        loc_canDat.distLPG.begin = loc_canDat.distance;
+        loc_canDat.average_gasconsumption = 0.0;
       }
-      data_can.distLPG.result = (data_can.distance - data_can.distLPG.begin); // вычисление пробега в поездке (после включения зажигания)
+
+      loc_canDat.distLPG.result = loc_canDat.distance - loc_canDat.distLPG.begin;
     }
     else
-      data_can.distLPG.begin = data_can.distance;
-
-    if (data_can.distLPG.result > 1000)
     {
-      data_can.average_gasconsumption = (1 - 5 * K) * data_can.average_gasconsumption + 5 * K * calculation_average_gasconsumption(data_can);
-      data_can.distLPG.gas_mileage = (1 - K) * (data_can.distLPG.gas_mileage) + K * (calculation_gas_mileage(data_can));
+      loc_canDat.distLPG.begin = loc_canDat.distance;
     }
-    if (data_can.average_gasconsumption > 25.5)
-      data_can.average_gasconsumption = 25.5;
-    if (data_can.distLPG.gas_mileage > 2550.0)
-      data_can.distLPG.gas_mileage = 2550.0;
+
+    if (loc_canDat.distLPG.result > 1000)
+    {
+      if (loc_canDat.distLPG.result != 0)
+      {
+        loc_canDat.average_gasconsumption =
+            (1 - 5 * K) * loc_canDat.average_gasconsumption +
+            5 * K * calculation_average_gasconsumption(loc_canDat);
+      }
+
+      loc_canDat.distLPG.gas_mileage =
+          (1 - K) * loc_canDat.distLPG.gas_mileage +
+          K * calculation_gas_mileage(loc_canDat);
+    }
+
+    if (loc_canDat.average_gasconsumption > 25.5)
+      loc_canDat.average_gasconsumption = 25.5;
+
+    if (loc_canDat.distLPG.gas_mileage > 2550.0)
+      loc_canDat.distLPG.gas_mileage = 2550.0;
+
+    portENTER_CRITICAL(&dataMux);
+    data_can.levelEconomicalDriving = loc_canDat.levelEconomicalDriving;
+    data_can.distLPG.begin = loc_canDat.distLPG.begin;
+    data_can.distLPG.result = loc_canDat.distLPG.result;
+    data_can.average_gasconsumption = loc_canDat.average_gasconsumption;
+    data_can.distLPG.gas_mileage = loc_canDat.distLPG.gas_mileage;
+    portEXIT_CRITICAL(&dataMux);
+
     vTaskDelay(pdMS_TO_TICKS(PERIOD_UPDATE_UI));
   }
-  vTaskDelete(NULL);
 }
 
 // вывод данных на экран
@@ -440,202 +554,46 @@ void send_CAN(void *pvParameters)
 {
   for (;;)
   {
-    if (can_ok && millis() > 10000)
-    {
-      canFrame.identifier = PGN_SEND_DATA; // идентификатор посылки в кан шину: данные для мониторинга
-      for (int i = 0; i < 7; i++)
-        canFrame.data[i] = 0;
+    Can_Data loc_canDat{};
+    bool localCanOk;
 
-      canFrame.data[0] = data_can.levelEconomicalDriving;
-      canFrame.data[1] = data_can.average_gasconsumption * 10;
-      canFrame.data[2] = data_can.distLPG.gas_mileage / 10;
-      canFrame.data[3] = data_can.tankVolume / 10;
-      ESP32Can.writeFrame(canFrame, 50);
+    portENTER_CRITICAL(&dataMux);
+    loc_canDat = data_can;
+    localCanOk = can_ok;
+    portEXIT_CRITICAL(&dataMux);
+
+    if (localCanOk && millis() > 10000)
+    {
+      uint8_t payload[8] = {0};
+      payload[0] = loc_canDat.levelEconomicalDriving;
+      payload[1] = static_cast<uint8_t>(loc_canDat.average_gasconsumption * 10);
+      payload[2] = static_cast<uint8_t>(loc_canDat.distLPG.gas_mileage / 10);
+      payload[3] = static_cast<uint8_t>(loc_canDat.tankVolume / 10);
+
+      sendCanFrame(PGN_SEND_DATA, payload, 8, 50);
     }
+
     vTaskDelay(pdMS_TO_TICKS(500));
   }
-  vTaskDelete(NULL);
 }
 
 void watch_dog_CAN(void *pvParameters)
 {
   for (;;)
   {
+    portENTER_CRITICAL(&dataMux);
     counter_lost_can_vehicle++;
     counter_lost_can_EVO++;
+    portEXIT_CRITICAL(&dataMux);
+
     vTaskDelay(pdMS_TO_TICKS(1000));
   }
-  vTaskDelete(NULL);
-}
-
-void wifiInit()
-{
-  WiFi.mode(WIFI_AP);
-  WiFi.softAP(ssid, password, 1, 0, 2);
-}
-
-// конструктор страницы
-void buildPage()
-{
-  GP.BUILD_BEGIN(800);
-  GP.THEME(GP_DARK);
-  GP.GRID_RESPONSIVE(500);
-  GP.UPDATE("style,canSpeed,engineLoad,vehicleType,tankVolume,distance,rpm,oilFuelRate,wheelSpeed,vehicleWeight,airTemper,engineTemper,oilTemper,fuelTemper,exhaustGasTemper,state,acc,cngInjectionTime,cngIstValue,cngRailPressure,cngTurboPressure,cngLevel,cngRailPressure,cngWaterTemperature,cngRailTemperature,cngTripFuel,cngTotalFuelUsed,cngDieselReduction,error,busErrCounter");
-  GP.TITLE("Дисплей EVO | " + VER, "");
-  GP.NAV_TABS("Телеметрия,Настройка");
-  GP.NAV_BLOCK_BEGIN();
-  M_BOX(GP.LABEL("Экономия дизельного топлива, %", "", GP_GRAY_B, 0, 1); GP.LABEL("-", "style", GP_GRAY_B, 0, 1););
-  M_GRID(
-      M_BLOCK_TAB(
-          "АВТОМОБИЛЬ", "400", GP_GRAY_B,
-          M_BOX(GP.LABEL("Пробег, км", "", GP_GRAY_B, 0, 0); GP.LABEL("-", "distance"););
-          M_BOX(GP.LABEL("Обороты RPM, об/мин", "", GP_GRAY_B, 0, 0); GP.LABEL("-", "rpm"););
-          M_BOX(GP.LABEL("Мг. расход ДТ, л/100 км", "", GP_GRAY_B, 0, 0); GP.LABEL("-", "oilFuelRate"););
-          M_BOX(GP.LABEL("Скорость, км/ч", "", GP_GRAY_B, 0, 0); GP.LABEL("-", "wheelSpeed"););
-          M_BOX(GP.LABEL("Нагрузка двигатель, %", "", GP_GRAY_B, 0, 0); GP.LABEL("-", "engineLoad"););
-          M_BOX(GP.LABEL("Вес, т", "", GP_GRAY_B, 0, 0); GP.LABEL("-", "vehicleWeight"););
-          M_BOX(GP.LABEL("Т воздух, °C", "", GP_GRAY_B, 0, 0); GP.LABEL("-", "airTemper"););
-          M_BOX(GP.LABEL("Т двигатель, °C", "", GP_GRAY_B, 0, 0); GP.LABEL("-", "engineTemper"););
-          M_BOX(GP.LABEL("Т масло, °C", "", GP_GRAY_B, 0, 0); GP.LABEL("-", "oilTemper"););
-          M_BOX(GP.LABEL("T топливо, °C", "", GP_GRAY_B, 0, 0); GP.LABEL("-", "fuelTemper"););
-          M_BOX(GP.LABEL("Т выхлоп, °C", "", GP_GRAY_B, 0, 0); GP.LABEL("-", "exhaustGasTemper");););
-      M_BLOCK_TAB(
-          "EVO NEW", "400", GP_ORANGE_B,
-          M_BOX(GP.LABEL("Режим", "", GP_GRAY_B, 0, 1); GP.LABEL("-", "state", GP_GRAY_B, 0, 1););
-          M_BOX(GP.LABEL("Педаль, %", "", GP_GRAY_B, 0, 0); GP.LABEL("-", "acc"););
-          M_BOX(GP.LABEL("Газ, мс", "", GP_GRAY_B, 0, 0); GP.LABEL("-", "cngInjectionTime"););
-          M_BOX(GP.LABEL("Газ, кг/ч", "", GP_GRAY_B, 0, 0); GP.LABEL("-", "cngIstValue"););
-          M_BOX(GP.LABEL("Карта ДТ", "", GP_GRAY_B, 0, 0); GP.LABEL("-", "cngDieselReduction"););
-          M_BOX(GP.LABEL("Турбо, бар", "", GP_GRAY_B, 0, 0); GP.LABEL("-", "cngTurboPressure"););
-          M_BOX(GP.LABEL("Уровень, бар", "", GP_GRAY_B, 0, 0); GP.LABEL("-", "cngLevel"););
-          M_BOX(GP.LABEL("Редуктор, бар", "", GP_GRAY_B, 0, 0); GP.LABEL("-", "cngRailPressure"););
-          M_BOX(GP.LABEL("T ред °C", "", GP_GRAY_B, 0, 0); GP.LABEL("-", "cngWaterTemperature"););
-          M_BOX(GP.LABEL("T газ °C", "", GP_GRAY_B, 0, 0); GP.LABEL("-", "cngRailTemperature"););
-          M_BOX(GP.LABEL("Расход газ, кг", "", GP_GRAY_B, 0, 0); GP.LABEL("-", "cngTripFuel"););
-          M_BOX(GP.LABEL("Расход итого, кг", "", GP_GRAY_B, 0, 0); GP.LABEL("-", "cngTotalFuelUsed"););
-          M_BOX(GP.LABEL("Счетчик кан ошибок", "", GP_GRAY_B, 0, 0); GP.LABEL("-", "busErrCounter"););
-          M_BOX(GP.LABEL("Флаги EVO", "", GP_GRAY, 0, 1););
-          M_BOX(GP.LABEL("-", "error", GP_RED_B, 0, 0););););
-  GP.NAV_BLOCK_END();
-  GP.NAV_BLOCK_BEGIN();
-  M_GRID(
-      M_BLOCK_TAB("",
-                  // "Настройки", "400", GP_GRAY_B,
-                  M_BOX(GP.LABEL("Скорость can шины, кБ"); GP.LABEL(String(data_can.canSpeed), "canSpeed"););
-                  M_BOX(GP.LABEL("Тип данных в can"); GP.LABEL(data_can.vehicleType, "vehicleType"););
-                  M_BOX(GP.LABEL("Объем газовых баллонов, л"); GP.LABEL(String(data_can.tankVolume), "tankVolume"););
-                  GP.FILE_UPLOAD("file_upl", "Загрузить файл настроек", "", GP_ORANGE_B); // кнопка загрузки
-                  GP.FILE_MANAGER(&LittleFS);););                                         // файловый менеджер
-  GP.NAV_BLOCK_END();
-  GP.FORM_END();
-  GP.BUILD_END();
-}
-
-void actionPage()
-{
-  if (ui.update())
-  {
-    ui.updateInt("canSpeed", data_can.canSpeed);
-    ui.updateString("vehicleType", data_can.vehicleType);
-    ui.updateInt("tankVolume", data_can.tankVolume);
-    ui.updateInt("busErrCounter", ESP32Can.busErrCounter());
-
-    if (counter_lost_can_EVO < TIME_LOST_CAN * 2)
-    {
-      String str = data_can.state ? "Газ" : "Дт";
-      auto t = data_can.levelEconomicalDriving;
-      ui.updateInt("style", t);
-      ui.updateString("state", str);
-      ui.updateInt("acc", data_can.ACC);
-      ui.updateInt("cngLevel", data_can.cngLevel);
-      ui.updateInt("cngRailTemperature", data_can.cngRailTemperature - 40);
-      ui.updateInt("cngWaterTemperature", data_can.cngWaterTemperature);
-      ui.updateInt("cngDieselReduction", data_can.cngDieselReduction);
-      ui.updateFloat("cngTurboPressure", data_can.cngTurboPressure / 100.0, 1);
-      ui.updateFloat("cngRailPressure", data_can.cngRailPressure / 50.0, 1);
-      ui.updateFloat("cngTripFuel", data_can.cngTripFuel / 1000.0, 1);
-      ui.updateFloat("cngTotalFuelUsed", data_can.cngTotalFuelUsed / 2.0, 1);
-      ui.updateFloat("cngInjectionTime", data_can.cngInjectionTime / 10.0, 1);
-      ui.updateFloat("cngIstValue", data_can.cngIstValue / 10.0, 1);
-      str = getErrorString(data_can.errorEVO);
-      ui.updateString("error", str);
-    }
-    else
-    {
-      String str = "no can EVO";
-      ui.updateInt("style", 0);
-      ui.updateString("state", str);
-      ui.updateInt("acc", 0);
-      ui.updateInt("cngLevel", 0);
-      ui.updateInt("cngRailTemperature", 0);
-      ui.updateInt("cngWaterTemperature", 0);
-      ui.updateInt("cngDieselReduction", 0);
-      ui.updateInt("cngTurboPressure", 0);
-      ui.updateInt("cngRailPressure", 0);
-      ui.updateInt("cngTripFuel", 0);
-      ui.updateInt("cngTotalFuelUsed", 0);
-      ui.updateInt("cngInjectionTime", 0);
-      ui.updateInt("cngIstValue", 0);
-      ui.updateString("error", str);
-    }
-
-    if (can_ok)
-    {
-      float d = data_can.distLPG.result / 1000.0;
-      ui.updateFloat("distance", d);
-      ui.updateInt("rpm", data_can.rpm);
-      ui.updateFloat("oilFuelRate", data_can.oilFuelRate / 20.0, 1);
-      ui.updateInt("wheelSpeed", data_can.wheelSpeed);
-      ui.updateInt("engineLoad", data_can.engineLoad);
-      ui.updateFloat("vehicleWeight", data_can.vehicleWeight / 2000.0, 1);
-      ui.updateInt("airTemper", data_can.airTemper);
-      ui.updateInt("engineTemper", data_can.engineTemper);
-      ui.updateInt("oilTemper", data_can.oilTemper);
-      ui.updateInt("fuelTemper", data_can.fuelTemper);
-      ui.updateInt("exhaustGasTemper", data_can.exhaustGasTemper);
-    }
-    else
-    {
-      ui.updateInt("distance", 0);
-      ui.updateInt("rpm", 0);
-      ui.updateInt("oilFuelRate", 0);
-      ui.updateInt("wheelSpeed", 0);
-      ui.updateInt("engineLoad", 0);
-      ui.updateInt("vehicleWeight", 0);
-      ui.updateInt("airTemper", 0);
-      ui.updateInt("engineTemper", 0);
-      ui.updateInt("oilTemper", 0);
-      ui.updateInt("fuelTemper", 0);
-      ui.updateInt("exhaustGasTemper", 0);
-    }
-  }
-
-  if (ui.upload())
-  {
-    ui.saveFile(LittleFS.open('/' + ui.fileName(), "w")); // сохранение в корень по имени файла
-  }
-
-  // ===== ФАЙЛОВЫЙ МЕНЕДЖЕР =====
-  // обработчик скачивания файлов (для открытия в браузере)
-  if (ui.download())
-    ui.sendFile(LittleFS.open(ui.uri(), "r"));
-
-  // // обработчик удаления файлов
-  // if (ui.deleteFile())
-  // {
-  //   LittleFS.remove(ui.deletePath());
-  //   Serial.println(ui.deletePath());
-  // }
-
-  // // обработчик переименования файлов
-  // if (ui.renameFile())
-  //   LittleFS.rename(ui.renamePath(), ui.renamePathTo());
 }
 
 String getErrorString(uint8_t err[])
 {
   String error{};
-  File file = FileSys.open("/" + ERROR_EVO_NEW, FILE_READ);
+  File file = LittleFS.open("/" + ERROR_EVO_NEW, FILE_READ);
   std::vector<String> str_err{};
 
   int i = 0;
@@ -680,3 +638,61 @@ int lls_tarring(int data)
   else
     return -1;
 };
+
+bool loadDisplayConfig()
+{
+  File configFile = LittleFS.open("/display_config.json", "r");
+  if (!configFile)
+  {
+    Serial.println("loadDisplayConfig: file not found");
+    return false;
+  }
+
+  DynamicJsonDocument doc(1024);
+  DeserializationError error = deserializeJson(doc, configFile);
+  configFile.close();
+
+  if (error)
+  {
+    Serial.println("loadDisplayConfig: json parse failed");
+    return false;
+  }
+
+  JsonArray pages = doc["pages"].as<JsonArray>();
+  if (pages.isNull())
+  {
+    Serial.println("loadDisplayConfig: pages array missing");
+    return false;
+  }
+
+  for (int i = 0; i < DISPLAY_PAGE_COUNT && i < pages.size(); ++i)
+  {
+    g_displayConfig.pages[i].enabled = pages[i]["enabled"].as<bool>();
+    g_displayConfig.pages[i].order = pages[i]["order"].as<uint8_t>();
+  }
+
+  Serial.println("loadDisplayConfig: ok");
+  return true;
+}
+
+bool saveDisplayConfig()
+{
+  DynamicJsonDocument doc(1024);
+  JsonArray pages = doc.createNestedArray("pages");
+
+  for (int i = 0; i < DISPLAY_PAGE_COUNT; ++i)
+  {
+    JsonObject page = pages.createNestedObject();
+    page["enabled"] = g_displayConfig.pages[i].enabled;
+    page["order"] = g_displayConfig.pages[i].order;
+  }
+
+  File configFile = LittleFS.open("/display_config.json", "w");
+  if (!configFile)
+  {
+    return false;
+  }
+  serializeJson(doc, configFile);
+  configFile.close();
+  return true;
+}

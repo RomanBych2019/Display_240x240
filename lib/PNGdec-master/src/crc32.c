@@ -35,9 +35,9 @@
 #  define BYFOUR
 #endif
 #ifdef BYFOUR
-   local unsigned long crc32_little OF((unsigned long,
+   loc_can unsigned long crc32_little OF((unsigned long,
                         const unsigned char FAR *, z_size_t));
-   local unsigned long crc32_big OF((unsigned long,
+   loc_can unsigned long crc32_big OF((unsigned long,
                         const unsigned char FAR *, z_size_t));
 #  define TBLS 8
 #else
@@ -45,10 +45,10 @@
 #endif /* BYFOUR */
 
 /* Local functions for crc concatenation */
-local unsigned long gf2_matrix_times OF((unsigned long *mat,
+loc_can unsigned long gf2_matrix_times OF((unsigned long *mat,
                                          unsigned long vec));
-local void gf2_matrix_square OF((unsigned long *square, unsigned long *mat));
-local uLong crc32_combine_ OF((uLong crc1, uLong crc2, z_off64_t len2));
+loc_can void gf2_matrix_square OF((unsigned long *square, unsigned long *mat));
+loc_can uLong crc32_combine_ OF((uLong crc1, uLong crc2, z_off64_t len2));
 
 
 #ifdef DYNAMIC_CRC_TABLE
@@ -263,7 +263,7 @@ unsigned long ZEXPORT crc32(crc, buf, len)
 #define DOLIT32 DOLIT4; DOLIT4; DOLIT4; DOLIT4; DOLIT4; DOLIT4; DOLIT4; DOLIT4
 
 /* ========================================================================= */
-local unsigned long crc32_little(crc, buf, len)
+loc_can unsigned long crc32_little(crc, buf, len)
     unsigned long crc;
     const unsigned char FAR *buf;
     z_size_t len;
@@ -303,7 +303,7 @@ local unsigned long crc32_little(crc, buf, len)
 #define DOBIG32 DOBIG4; DOBIG4; DOBIG4; DOBIG4; DOBIG4; DOBIG4; DOBIG4; DOBIG4
 
 /* ========================================================================= */
-local unsigned long crc32_big(crc, buf, len)
+loc_can unsigned long crc32_big(crc, buf, len)
     unsigned long crc;
     const unsigned char FAR *buf;
     z_size_t len;
@@ -341,7 +341,7 @@ local unsigned long crc32_big(crc, buf, len)
 #define GF2_DIM 32      /* dimension of GF(2) vectors (length of CRC) */
 
 /* ========================================================================= */
-local unsigned long gf2_matrix_times(mat, vec)
+loc_can unsigned long gf2_matrix_times(mat, vec)
     unsigned long *mat;
     unsigned long vec;
 {
@@ -358,7 +358,7 @@ local unsigned long gf2_matrix_times(mat, vec)
 }
 
 /* ========================================================================= */
-local void gf2_matrix_square(square, mat)
+loc_can void gf2_matrix_square(square, mat)
     unsigned long *square;
     unsigned long *mat;
 {
@@ -369,7 +369,7 @@ local void gf2_matrix_square(square, mat)
 }
 
 /* ========================================================================= */
-local uLong crc32_combine_(crc1, crc2, len2)
+loc_can uLong crc32_combine_(crc1, crc2, len2)
     uLong crc1;
     uLong crc2;
     z_off64_t len2;
