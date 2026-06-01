@@ -24,7 +24,6 @@ Valve valves[4] = {{SolenoidHealth::OK, 0},
 #define CAN_TX GPIO_NUM_21
 
 CanFrame rxFrame;
-
 #define FORMAT_LITTLEFS_IF_FAILED false
 
 #define I2C_SDA GPIO_NUM_4
@@ -32,9 +31,8 @@ CanFrame rxFrame;
 #define TP_INT GPIO_NUM_0
 #define TP_RST GPIO_NUM_1
 
-TFT_240_240 *maindisplay;
+TFT_240_240 *maindisplay = nullptr;
 CST816D touch(I2C_SDA, I2C_SCL, TP_RST, TP_INT);
-// int8_t screenNumber = 0;             //  счетчик экранов
 uint8_t gesture;
 uint16_t touchX, touchY;
 
@@ -44,27 +42,27 @@ const char *password = "00000001";
 const char *loginOTA = "ItalGaz";
 const char *passwordOTA = "001";
 
-const String VER = "Ver - 3.0 Date - " + String(__DATE__) + "\r";
-const String MAP_ACC_RPM_NAME = "Map_ACC-RPM.csv";
-const String COPY_MAP_ACC_RPM_NAME = "Copy_Map_ACC-RPM.csv";
-const String ERROR_EVO_NEW = "Error_EVO_new.csv";
+const String VER = "Ver - 3.1 Date - " + String(__DATE__) + "\r";
 
-const float K = 0.02;
+const float K = 0.2;
 
 const int TIME_READ_CAN = 100;
-const int PERIOD_UPDATE_TFT = 3000;
+const int PERIOD_UPDATE_TFT = 300;
 const int PERIOD_UPDATE_UI = 300;
 const int TIME_LOST_CAN = 20;
-const int PAUSE_TOUCH_ON = 100;
-bool flag_touch = false;
+const int PAUSE_TOUCH_ON = 200;
+
 const float KG_TO_M3 = 0.85f;
 
-const int COLUM = 34;
-const int LINE = 26;
+const int COLUM = 34;                           //  количество столбцов в карте ACC\RPM
+const int LINE = 26;                            //  количество строк в карте ACC\RPM
 
 Can_Data data_can{};
-CanFrame canFrame{0}; // структура посылки в кан шину
+CanFrame canFrame{0};                           // структура посылки в кан шину
 uint8_t map_ACC_RPM[LINE][COLUM]{};
+
+const String ERROR_EVO_NEW{"Error_EVO_new.csv"};
+std::vector<String> error_evo{};
 
 unsigned long tim = 0;
 unsigned long time_touch = 0;
@@ -72,10 +70,11 @@ unsigned long time_touch = 0;
 int counter_lost_can_vehicle = 0;
 int counter_lost_can_EVO = 0;
 bool can_ok = true; // флаг наличия данных по кан
-bool gas_on = true;
-int canSpeed = 0;                   //  скорость кан-шины
-int vehicleType = 0;                //  тип автомобиля
-float levelEconomicalDriving = 0;
+bool gas_on = true; // флаг работы на газе, устанавливается на основе данных с КАН шины, используется для начала отсчета расхода газа в поездке и расчета уровня экономичного вождения
+float levelEconomicalDriving = 0; // уровень экономичного вождения, рассчитывается на основе карты ACC\RPM и данных с КАН шины
+
+
+bool startGas = false; // флаг начала отсчета расхода газа во время движения на газе
 
 // парсинг PGN
 void analise_can_id(CanFrame &data);
@@ -84,28 +83,47 @@ void analise_can_id(CanFrame &data);
 int calculation_economical_driving(Can_Data &date);
 
 // вычисление среднего расхода газа в поездке
-int calculation_average_gasconsumption(Can_Data &date);
+float calculation_average_gasconsumption(Can_Data &date);
 
 // вычисление оставшегося пробега на газе
 int calculation_gas_mileage(Can_Data &date);
 
-// парсинг карты из файла сsv
-bool parse_csv(uint8_t (&)[LINE][COLUM], const String &name);
+// загрузка карты ACC\RPM из внешнего файла в массив map_ACC_RPM
+bool loadAccRpmFile(uint8_t (&)[LINE][COLUM], const String &name);
+
 void uiTick(void *pvParameters);
-void update_TFT(void *pvParameters);
 void send_CAN(void *pvParameters);
 void watch_dog_CAN(void *pvParameters);
-bool compare(File &f1, File &f2);
-String getErrorString(uint8_t err[]);
+void taskDisplay(void *pvParameters);
+// String (uint8_t err[]);
 int lls_tarring(int data);
 
 bool loadDisplayConfig();
 bool saveDisplayConfig();
 
+void errorStringtoVec(std::vector<String> &errror_evo);
+String updateStringError(uint8_t err[], std::vector<String> &error_evo);
+
 static portMUX_TYPE dataMux = portMUX_INITIALIZER_UNLOCKED;
 
-
 extern DisplayConfig g_displayConfig;
+QueueHandle_t g_displayQueue = nullptr;
+
+enum class DisplayCmdType : uint8_t
+{
+    UpdateData,
+    ShowPage,
+    NextPage,
+    PrevPage,
+    // ForceRefresh
+};
+
+struct DisplayMessage
+{
+    DisplayCmdType type;
+    Can_Data data;
+    int page;
+};
 
 static inline Can_Data snapshotDataCan()
 {
@@ -166,16 +184,16 @@ static WebPortalData makeWebPortalData()
   d.levelEconomicalDriving = local.levelEconomicalDriving;
   d.ACC = local.ACC;
   d.cngLevel = local.cngLevel;
-  d.cngRailTemperature = local.cngRailTemperature - 40;
+  d.cngRailTemperature = local.cngRailTemperature;
   d.cngWaterTemperature = local.cngWaterTemperature;
   d.cngDieselReduction = local.cngDieselReduction;
-  d.cngTurboPressure = local.cngTurboPressure / 100.0f;
-  d.cngRailPressure = local.cngRailPressure / 50.0f;
-  d.cngTripFuel = local.cngTripFuel / 1000.0f;
-  d.cngTotalFuelUsed = local.cngTotalFuelUsed / 2.0f;
-  d.cngInjectionTime = local.cngInjectionTime / 10.0f;
-  d.cngIstValue = local.cngIstValue / 10.0f;
-  d.error = getErrorString(local.errorEVO);
+  d.cngTurboPressure = local.cngTurboPressure;
+  d.cngRailPressure = local.cngRailPressure;
+  d.cngTripFuel = local.cngTripFuel;
+  d.cngTotalFuelUsed = local.cngTotalFuelUsed;
+  d.cngInjectionTime = local.cngInjectionTime;
+  d.cngIstValue = local.cngIstValue;
+  d.error = updateStringError(local.errorEVO, error_evo);
 
   // d.distance = local.distLPG.result / 1000.0f;
   d.distance = local.distance;
@@ -205,9 +223,10 @@ static WebPortalData makeWebPortalData()
 
 static bool applyUploadedConfig(const String& fileName)
 {
-  if (fileName == MAP_ACC_RPM_NAME || fileName == COPY_MAP_ACC_RPM_NAME)
+  // if (fileName == MAP_ACC_RPM_NAME || fileName == COPY_MAP_ACC_RPM_NAME)
+  if (fileName == MAP_ACC_RPM_NAME)
   {
-    bool applied = parse_csv(map_ACC_RPM, fileName);
+    bool applied = loadAccRpmFile(map_ACC_RPM, fileName);
     if (applied)
     {
       int localCanSpeed;
@@ -268,6 +287,20 @@ static void applyPagesFromWeb(const WebPageCfg* pages, uint8_t count)
     saveDisplayConfig();
 }
 
+static void applyGeneralConfigFromWeb(const WebGeneralConfig& cfg)
+{
+    data_can.canSpeed = cfg.canSpeed;
+    data_can.vehicleType = cfg.vehicleType;
+    data_can.tankVolume = cfg.tankVolume;
+
+    saveDisplayConfig();
+
+    ESP32Can.begin(ESP32Can.convertSpeed(data_can.canSpeed), CAN_TX, CAN_RX, 10, 10);
+
+    if (maindisplay)
+        maindisplay->setDisplayConfig(g_displayConfig);
+}
+
 WebPortal webPortal(
     LittleFS,
     ssid,
@@ -277,4 +310,5 @@ WebPortal webPortal(
     makeWebPortalData,
     applyUploadedConfig,
     applyPagesFromWeb,
+    applyGeneralConfigFromWeb,
     VER);

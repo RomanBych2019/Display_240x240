@@ -113,6 +113,8 @@ private:
     void scale_horizont(int vol);
 
     DisplayConfig displayConfig_;
+    DisplayPageId pages[DISPLAY_PAGE_COUNT];
+
     int currentUserPageIndex_ = 0;
     // void loadUserPages();
 

@@ -1,4 +1,5 @@
 #include "WebPortal.h"
+#include <list>
 
 WebPortal *WebPortal::_self = nullptr;
 
@@ -10,6 +11,7 @@ WebPortal::WebPortal(fs::FS &fs,
                      DataProvider dataProvider,
                      ApplyConfigCallback applyConfig,
                      SavePagesCallback savePages,
+                     SaveGeneralConfigCallback saveGeneralConfig,
                      const String &versionText)
     : _fs(fs),
       _ui(),
@@ -20,7 +22,8 @@ WebPortal::WebPortal(fs::FS &fs,
       _versionText(versionText),
       _dataProvider(dataProvider),
       _applyConfig(applyConfig),
-      _savePages(savePages)
+      _savePages(savePages),
+      _saveGeneralConfig(saveGeneralConfig)
 {
     _self = this;
 }
@@ -69,6 +72,23 @@ void WebPortal::buildPage()
     WebPortalData d;
     if (_dataProvider)
         d = _dataProvider();
+        
+    int8_t speed = 0;
+    for (int i = 0; i < 4; i++)
+    if (d.canSpeed == canSpeed[i])
+        {
+            speed = i;
+            break;
+        }
+
+    int8_t vehicle = 0;
+    for (int i = 0; i < 4; i++)
+    if (d.vehicleType == vehicleTyp[i])
+        {
+            vehicle = i;
+            break;
+        }
+    String vehicles = vehicleTyp[0] + ',' +  vehicleTyp[1] + ','  + vehicleTyp[2] + ',' + vehicleTyp[3];
 
     GP.BUILD_BEGIN(1024);
     GP.THEME(GP_DARK);
@@ -114,23 +134,24 @@ void WebPortal::buildPage()
     GP.NAV_BLOCK_END();
 
     GP.NAV_BLOCK_BEGIN();
+    GP.FORM_BEGIN("/save_pages");
     M_GRID(
-        M_BLOCK_TAB("", M_BOX(GP.LABEL("Скорость can шины, кБ"); GP.LABEL(String(d.canSpeed), "canSpeed");); M_BOX(GP.LABEL("Тип данных в can"); GP.LABEL(d.vehicleType, "vehicleType");); M_BOX(GP.LABEL("Объем газовых баллонов, л"); GP.LABEL(String(d.tankVolume), "tankVolume");); GP.FILE_UPLOAD("file_upl", "Загрузить файл настроек", "", GP_ORANGE_B);
-                    // GP.FILE_MANAGER(&_fs);
-                    GP.FORM_BEGIN("/save_pages");
-
-                    // Добавляем форму для каждой страницы
-                    for (int i = 0; i < WebPortalData::WEB_PAGE_COUNT; ++i) {
-                        const auto &page = d.pageCfg[i];
-
-                        if (!page.systemPage) {
-                            String enId = "pg_en_" + String(i);
-                            String ordId = "pg_ord_" + String(i);
-                            GP.CHECK(enId.c_str(), page.enabled); GP.LABEL(page.title); //GP.NUMBER(ordId.c_str(), "Порядок", page.order, "20", true);
-    
+        M_BLOCK_TAB("Автомобиль", "400", GP_GRAY_B,
+            M_BOX(GP.LABEL("Скорость can шины, кБ"); GP.SELECT("canSpeed", "250, 500, 666, 1000", speed););
+            M_BOX(GP.LABEL("Тип данных в can"); GP.SELECT("cfg_vehicleType", vehicles, vehicle););
+            M_BOX(GP.LABEL("Объем газовых баллонов, л"); GP.SPINNER("cfg_tankVolume", d.tankVolume, 1, 250););
+            M_BOX(GP.FILE_UPLOAD("file_upl", "Загрузить карту", "", GP_ORANGE_B); GP.SUBMIT_MINI("save", GP_GRAY_B);););
+        M_BLOCK_TAB("Дисплей", "400", GP_GRAY_B,
+            // Добавляем форму для каждой страницы
+                for (int i = 0; i < WebPortalData::WEB_PAGE_COUNT; ++i) {
+                    const auto &page = d.pageCfg[i];
+                    if (!page.systemPage) {
+                        String enId = "pg_en_" + String(i);
+                        String ordId = "pg_ord_" + String(i);
+                        GP.LABEL(page.title); GP.CHECK(enId.c_str(), page.enabled); GP.BREAK(); 
+                        //GP.NUMBER(ordId.c_str(), "Порядок", page.order, "20", true);
                         } 
-                    }
-                    GP.SUBMIT("save", "Сохранить страницы", GP_GREEN);););
+                    }););
     GP.FORM_END();
     GP.NAV_BLOCK_END();
 
@@ -140,15 +161,27 @@ void WebPortal::buildPage()
 
 void WebPortal::actionPage()
 {
-    if (_ui.update())
+    
+    if (_ui.upload())
     {
+        File file = _fs.open("/" + _ui.fileName(), "w");
+        if (_ui.fileName() != MAP_ACC_RPM_NAME)
+        if (file)
+        {
+            _ui.saveFile(file);
+            file.close();
+
+            if (_applyConfig)
+                _applyConfig(_ui.fileName());
+        }
+    }
+
+    if (_ui.update())
+    {        
         WebPortalData d;
         if (_dataProvider)
             d = _dataProvider();
 
-        _ui.updateInt("canSpeed", d.canSpeed);
-        _ui.updateString("vehicleType", d.vehicleType);
-        _ui.updateInt("tankVolume", d.tankVolume);
         _ui.updateInt("busErrCounter", d.busErrCounter);
 
         if (d.evoOk)
@@ -188,7 +221,6 @@ void WebPortal::actionPage()
             _ui.updateString("error", str);
         }
         {
-            // float dt = d.distance / 1000.0;
             _ui.updateFloat("distance", d.distance);
             _ui.updateInt("rpm", d.rpm);
             _ui.updateFloat("oilFuelRate", d.oilFuelRate, 1);
@@ -202,19 +234,6 @@ void WebPortal::actionPage()
             _ui.updateInt("exhaustGasTemper", d.exhaustGasTemper);
         }
 
-        if (_ui.upload())
-        {
-            File file = _fs.open("/" + _ui.fileName(), "w");
-            if (file)
-            {
-                _ui.saveFile(file);
-                file.close();
-
-                if (_applyConfig)
-                    _applyConfig(_ui.fileName());
-            }
-        }
-
         if (_ui.download())
             _ui.sendFile(_fs.open(_ui.uri(), "r"));
 
@@ -226,8 +245,6 @@ void WebPortal::actionPage()
     }
     if (_ui.form("/save_pages") || _ui.click("save"))
     {
-        Serial.println("Save");
-
         WebPageCfg pages[WebPortalData::WEB_PAGE_COUNT];
 
         WebPortalData d;
@@ -240,22 +257,42 @@ void WebPortal::actionPage()
         }
 
         pages[0].enabled = _ui.getBool("pg_en_0");
-        pages[0].order = _ui.getInt("pg_ord_0");
+        // pages[0].order = _ui.getInt("pg_ord_0");
+
+        log_e("p0 enable %d", pages[0].enabled);
 
         pages[1].enabled = _ui.getBool("pg_en_1");
-        pages[1].order = _ui.getInt("pg_ord_1");
+        // pages[1].order = _ui.getInt("pg_ord_1");
 
         pages[2].enabled = _ui.getBool("pg_en_2");
-        pages[2].order = _ui.getInt("pg_ord_2");
+        // pages[2].order = _ui.getInt("pg_ord_2");
 
         pages[3].enabled = _ui.getBool("pg_en_3");
-        pages[3].order = _ui.getInt("pg_ord_3");
+        // pages[3].order = _ui.getInt("pg_ord_3");
 
         pages[4].enabled = _ui.getBool("pg_en_4");
-        pages[4].order = _ui.getInt("pg_ord_4");
+        // pages[4].order = _ui.getInt("pg_ord_4");
 
         if (_savePages)
             _savePages(pages, WebPortalData::WEB_PAGE_COUNT);
+
+        WebGeneralConfig cfg;
+
+        int8_t speed = 0;
+        speed = _ui.getInt("canSpeed");
+        cfg.canSpeed = canSpeed[speed];
+
+        int8_t v = 0;
+        v = _ui.getInt("cfg_vehicleType");
+        cfg.vehicleType = vehicleTyp[v];
+        
+        log_e("Can speed %d", cfg.canSpeed);
+        log_e("VehType %s", cfg.vehicleType);
+
+        cfg.tankVolume = _ui.getInt("cfg_tankVolume");
+        
+        if (_saveGeneralConfig)
+            _saveGeneralConfig(cfg);
     }
 }
 

@@ -3,9 +3,9 @@
 
 enum class DisplayPageId : uint8_t
 {
-    CNG = 0,
+    ButtonOn = 0,
+    CNG,
     ParamEVO,
-    ButtonOn,
     LSLevel,
     ValveTank,
     EVOLost,

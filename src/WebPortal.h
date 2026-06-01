@@ -5,6 +5,11 @@
 #include <LittleFS.h>
 #include <GyverPortal.h>
 
+static String vehicleTyp[4] {"J1938", "Shakman", "HOWO", "Sitrak"};
+static const int16_t canSpeed[4] {250, 500, 666, 1000};
+static const String MAP_ACC_RPM_NAME = "Map_ACC-RPM.csv";
+
+
 struct WebPageCfg
 {
   String key;
@@ -12,6 +17,13 @@ struct WebPageCfg
   bool enabled = false;
   int order = 0;
   bool systemPage = false;
+};
+
+struct WebGeneralConfig
+{
+  int canSpeed = 0;
+  String vehicleType;
+  int tankVolume = 0;
 };
 
 struct WebPortalData
@@ -62,6 +74,7 @@ public:
   using DataProvider = WebPortalData (*)();
   using ApplyConfigCallback = bool (*)(const String& fileName);
   using SavePagesCallback = void (*)(const WebPageCfg* pages, uint8_t count);
+  using SaveGeneralConfigCallback = void (*)(const WebGeneralConfig& cfg);
 
   WebPortal(fs::FS& fs,
             const char* ssid,
@@ -71,6 +84,7 @@ public:
             DataProvider dataProvider,
             ApplyConfigCallback applyConfig,
             SavePagesCallback savePages,
+            SaveGeneralConfigCallback saveGeneralConfig,
             const String& versionText);
 
   void begin();
@@ -91,6 +105,7 @@ private:
   DataProvider _dataProvider;
   ApplyConfigCallback _applyConfig;
   SavePagesCallback _savePages;
+  SaveGeneralConfigCallback _saveGeneralConfig;
 
   void beginWifi();
   void buildPage();

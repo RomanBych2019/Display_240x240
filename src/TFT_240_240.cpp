@@ -223,12 +223,12 @@ void TFT_240_240::screen_ButtonOn()
 void TFT_240_240::screen_paramEVO()
 {
     const float tred = 1.0 * data.cngWaterTemperature;
-    const float presturbo = 0.01 * data.cngTurboPressure;
-    const float presred = 0.02 * data.cngRailPressure;
+    const float presturbo = data.cngTurboPressure;
+    const float presred = data.cngRailPressure;
     const int prescng = data.cngLevel;
 
-    const float injection_time = 0.1 * data.cngInjectionTime;
-    const float CNG = 0.1 * data.cngIstValue;
+    const float injection_time = data.cngInjectionTime;
+    const float CNG = data.cngIstValue;
     const String id = "id " + String(data.verID) + "  fw " + String(data.verFMlow);
 
     spr.createSprite(TFT_WIDTH, TFT_HEIGHT);
@@ -288,7 +288,10 @@ void TFT_240_240::screen_ValveTank()
     for (int i = 0; i < 4; i++)
     {
         if (valve_[i].getState().heat == SolenoidHealth::OK)
-            color_[i] = TFT_DARKGREEN;
+            if (valve_[i].getState().state)
+                color_[i] = TFT_DARKGREEN;
+            else
+                color_[i] = TFT_DARKGREY;
         else if (valve_[i].getState().heat == SolenoidHealth::SHORT)
             color_[i] = TFT_RED;
         else if (valve_[i].getState().heat == SolenoidHealth::OVERLOAD)
@@ -345,7 +348,7 @@ void TFT_240_240::screen_CNG()
         str = "Disel";
 
     scale_vertical(data.cngLevel / 2);
-    scale_horizont(data.cngIstValue / 10.0);
+    scale_horizont(data.cngIstValue);
 
     if (true_can())
     {
@@ -381,10 +384,10 @@ void TFT_240_240::screen_CNG()
         }
         else
         {
-            if (data.average_gasconsumption)
-                res = String(data.distLPG.gas_mileage, 0);
-            else
-                res = "";
+            // if (data.average_gasconsumption)
+            res = String(data.distLPG.gas_mileage, 0);
+            // else
+            // res = "";
         }
         spr.setTextDatum(TL_DATUM);
         spr.drawString(res, x, y);
@@ -481,7 +484,7 @@ bool TFT_240_240::true_can() const
 
 int TFT_240_240::getScreenNowShow() const
 {
-    // return screenNowShow;
+    return 1;
 }
 
 void TFT_240_240::pngShow(const String &path)
@@ -504,7 +507,7 @@ void TFT_240_240::pngShow(const String &path)
 
     if (rc != PNG_SUCCESS)
     {
-        Serial.printf("png.open failed: %d, file: %s\n", rc, path.c_str());
+        // log_e("png.open failed: %d, file: %s\n", rc, path.c_str());
         activeInstance_ = nullptr;
         return;
     }
@@ -512,7 +515,7 @@ void TFT_240_240::pngShow(const String &path)
     rc = png.decode(nullptr, 1);
     if (rc != PNG_SUCCESS)
     {
-        Serial.printf("png.decode failed: %d, file: %s\n", rc, path.c_str());
+        // log_e("png.decode failed: %d, file: %s\n", rc, path.c_str());
     }
 
     png.close();
@@ -571,6 +574,7 @@ void TFT_240_240::setData(const Can_Data &dat, const Valve valve[])
 void TFT_240_240::update()
 {
     color = set_color(data.levelEconomicalDriving);
+    showPage(pages[currentUserPageIndex_]);
 }
 
 void TFT_240_240::setDisplayConfig(const DisplayConfig &cfg)
@@ -581,7 +585,7 @@ void TFT_240_240::setDisplayConfig(const DisplayConfig &cfg)
 
 void TFT_240_240::nextUserPage()
 {
-    DisplayPageId pages[DISPLAY_PAGE_COUNT];
+    // DisplayPageId pages[DISPLAY_PAGE_COUNT];
     int count = 0;
 
     for (uint8_t order = 0; order < 250 && count < DISPLAY_PAGE_COUNT; ++order)
@@ -601,12 +605,14 @@ void TFT_240_240::nextUserPage()
     currentUserPageIndex_++;
     if (currentUserPageIndex_ >= count)
         currentUserPageIndex_ = 0;
+    backLight(false);
     showPage(pages[currentUserPageIndex_]);
+    backLight(true);
 }
 
 void TFT_240_240::prevUserPage()
 {
-    DisplayPageId pages[DISPLAY_PAGE_COUNT];
+    // DisplayPageId pages[DISPLAY_PAGE_COUNT];
     int count = 0;
 
     for (uint8_t order = 0; order < 250 && count < DISPLAY_PAGE_COUNT; ++order)
@@ -626,12 +632,14 @@ void TFT_240_240::prevUserPage()
     currentUserPageIndex_--;
     if (currentUserPageIndex_ < 0)
         currentUserPageIndex_ = count - 1;
+    backLight(false);
     showPage(pages[currentUserPageIndex_]);
+    backLight(true);
 }
 
 void TFT_240_240::showPage(DisplayPageId id)
 {
-    backLight(false);
+    // backLight(false);
     switch (id)
     {
     case DisplayPageId::CNG:
@@ -660,7 +668,7 @@ void TFT_240_240::showPage(DisplayPageId id)
     default:
         break;
     }
-    backLight(true);
+    // backLight(true);
 }
 
 void TFT_240_240::updatePageOrder()
