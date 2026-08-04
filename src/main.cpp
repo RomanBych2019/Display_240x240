@@ -4,8 +4,7 @@
 #include <ArduinoJson.h>
 
 #include "DisplayConfig.h"
-
-//#define DEBUG
+#include "esp_wifi.h"
 
 DisplayConfig g_displayConfig = {
     .pages = {
@@ -13,31 +12,23 @@ DisplayConfig g_displayConfig = {
         {DisplayPageId::ParamEVO, "paramEvo", "Параметры EVO", true, 0, false},
         {DisplayPageId::ButtonOn, "button", "Кнопка газ/дт", true, 2, false},
         {DisplayPageId::LSLevel, "lls", "Уровень топлива", false, 3, false},
-        {DisplayPageId::ValveTank, "valve", "Соленоиды", false, 4, false},
+        {DisplayPageId::ValveTank, "valve", "Соленоиды", true, 4, false},
         {DisplayPageId::EVOLost, "evoLost", "EVO Lost", true, 255, true},
     }};
 
 void setup(void)
 {
   Serial.begin(115200);
+    delay(1000);
+
 
   if (!LittleFS.begin(FORMAT_LITTLEFS_IF_FAILED))
   {
     log_e("LittleFS mount failed");
   }
-  // Try to mount, if failed, format
-  // if(!LittleFS.begin(true)){ // 'true' formats on failure
-    // Serial.println("LittleFS Mount Failed, formatting...");
-    // If 'true' in begin() isn't enough, add:
-    // LittleFS.format();
-    // LittleFS.begin();
-  // } else {
-    // Serial.println("LittleFS Mounted Successfully");
-  // }
-  
+
   maindisplay = new TFT_240_240();
   touch.begin();
-  
 
   loadAccRpmFile(map_ACC_RPM, MAP_ACC_RPM_NAME); //  загрузка карты ACC\RPM
   errorStringtoVec(error_evo);                   //  загрузка списка ошибок газового блока EVO из внешнего файла
@@ -49,7 +40,7 @@ void setup(void)
   g_displayQueue = xQueueCreate(8, sizeof(DisplayMessage));
   if (g_displayQueue == nullptr)
   {
-    // log_e("display queue create failed");
+    log_e("display queue create failed");
     while (1)
       yield();
   }
@@ -68,7 +59,7 @@ void setup(void)
       4096,           /* Размер стека задачи */
       NULL,           /* Параметр задачи */
       0,              /* Приоритет задачи */
-      NULL);           /* Идентификатор задачи, чтобы ее можно было отслеживать */
+      NULL);          /* Идентификатор задачи, чтобы ее можно было отслеживать */
 
   xTaskCreate(
       watch_dog_CAN,        /* Обновление  */
@@ -86,7 +77,13 @@ void setup(void)
       3,
       nullptr);
 
-  delay(1000);
+  xTaskCreate(
+      taskupdateThermalState,
+      "taskupdateThermalState",
+      2048,
+      nullptr,
+      10,
+      nullptr);
 
   if (g_displayQueue)
   {
@@ -94,14 +91,10 @@ void setup(void)
     msg.type = DisplayCmdType::NextPage;
     xQueueSend(g_displayQueue, &msg, 0);
   }
-  webPortal.begin();
+    Serial.println("Setup complit");
+    time_touch = 0;
 
-#ifdef DEBUG
-  for (;;)
-  {
-    yield();
-  }
-#endif
+  webPortal.begin();
 }
 
 void loop()
@@ -138,7 +131,7 @@ void loop()
   {
     if (touch.getTouch(&touchX, &touchY, &gesture))
     {
-      // log_e("Touch: x=%d, y=%d, gesture=%d", touchX, touchY, gesture); // не удалять вывод жестов, он нужен для настройки координат и распознавания жестов на дисплее
+      log_e("Touch: x=%d, y=%d, gesture=%d", touchX, touchY, gesture); // не удалять вывод жестов, он нужен для настройки координат и распознавания жестов на дисплее
       switch (gesture)
       {
       case GESTURE::SlideDown:
@@ -174,6 +167,7 @@ void loop()
           {
             uint8_t payload[8] = {0};
             payload[0] = localGasOn ? 1 : 0;
+            Serial.println("Send CAN");
             sendCanFrame(PGN_SEND_ON_EVO, payload, 8, 100);
           }
         }
@@ -700,4 +694,35 @@ String updateStringError(uint8_t err[], std::vector<String> &error_evo)
   if (error.length() == 0)
     error = "Ошибок нет";
   return error;
+}
+
+//  обновление данных о температуре чипа для контроля теплового состояния устройства
+void taskupdateThermalState(void *pvParameters)
+{
+  DisplayMessage msg{};
+  Can_Data lastData{};
+  int lastPage = 0;
+  for (;;)
+  {
+
+    vTaskDelay(pdMS_TO_TICKS(10000));
+    float chipTemp = temperatureRead();
+    if (chipTemp > 80.0)
+    {
+      // 1. Уменьшить мощность Wi-Fi
+      esp_wifi_set_max_tx_power(40);
+      // 2. Реже обновлять данные и отображение на TFT дисплее
+      PERIOD_UPDATE_UI = 1000;
+      // 3. Уменьшить яркость TFT
+      maindisplay->setMaxBrightness(80);
+    }
+    else if (chipTemp < 65.0)
+    {
+      // Восстановить нормальные настройки при снижении температуры
+      esp_wifi_set_max_tx_power(78);      // Максимальная мощность Wi-Fi
+      PERIOD_UPDATE_UI = 300;             // Стандартный период обновления
+      maindisplay->setMaxBrightness(150); // Стандартная яркость TFT 
+    }
+  }
+  vTaskDelete(NULL);
 }

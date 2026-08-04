@@ -20,7 +20,9 @@
 
 class TFT_240_240
 {
-public:
+private:
+
+    public:
     struct Scale
     {
         int x_, y_, l_, h_, vol_;
@@ -45,8 +47,6 @@ public:
         void show(TFT_eSprite &spr);
     };
 
-public:
-    // explicit TFT_240_240(fs::LittleFSFS& fs);
     explicit TFT_240_240();
 
     int getScreenNowShow() const;
@@ -61,6 +61,7 @@ public:
     void prevUserPage();
     void showPage(DisplayPageId id);
     void updatePageOrder();
+    void setMaxBrightness(int brightness);
 
 private:
     struct dot
@@ -75,7 +76,7 @@ private:
                        {SolenoidHealth::OK, 0},
                        {SolenoidHealth::OK, 0}}; // массив для хранения состояния клапанов баллонов
 
-    static constexpr int MAX_BRIGHT = 150;
+    int MAX_BRIGHT = 150;
     static constexpr int MAX_IMAGE_WIDTH = 240;
     static constexpr unsigned int KG_TO_M3 = 1;
 

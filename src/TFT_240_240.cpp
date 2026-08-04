@@ -4,12 +4,6 @@ TFT_240_240 *TFT_240_240::activeInstance_ = nullptr;
 
 void TFT_240_240::pngDrawCallback(PNGDRAW *pDraw)
 {
-    // if (!activeInstance_)
-    //     return;
-
-    // uint16_t lineBuffer[MAX_IMAGE_WIDTH];
-    // activeInstance_->png.getLineAsRGB565(pDraw, lineBuffer, PNG_RGB565_BIG_ENDIAN, 0xffffffff);
-    // activeInstance_->spr.pushImage(0, pDraw->y, pDraw->iWidth, 1, lineBuffer);
 
     if (!activeInstance_)
         return;
@@ -313,7 +307,7 @@ void TFT_240_240::screen_ValveTank()
     for (int i = 0; i < 5; i++)
     {
         spr.drawCircle(120, 120, 100 + i * 4, TFT_BLACK);
-        spr.drawCircle(120, 120, 100 + i * 4, TFT_BLACK);
+        spr.drawCircle(120, 120, 99 + i * 4, TFT_BLACK);
     }
 
     spr.setTextColor(TFT_DARKGREY);
@@ -484,7 +478,7 @@ bool TFT_240_240::true_can() const
 
 int TFT_240_240::getScreenNowShow() const
 {
-    return 1;
+    return static_cast<int>(pages[currentUserPageIndex_]);
 }
 
 void TFT_240_240::pngShow(const String &path)
@@ -680,4 +674,9 @@ void TFT_240_240::updatePageOrder()
             displayConfig_.pages[i].order = i;
         }
     }
+}
+
+void TFT_240_240::setMaxBrightness(int brightness)
+{
+    MAX_BRIGHT = brightness;
 }

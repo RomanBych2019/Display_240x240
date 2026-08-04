@@ -15,6 +15,7 @@
 #include <ESP32-TWAI-CAN.hpp>
 #include <DisplayConfig.h>
 
+
 Valve valves[4] = {{SolenoidHealth::OK, 0},  
                   {SolenoidHealth::OK, 0},
                   {SolenoidHealth::OK, 0},
@@ -47,8 +48,7 @@ const String VER = "Ver - 3.1 Date - " + String(__DATE__) + "\r";
 const float K = 0.2;
 
 const int TIME_READ_CAN = 100;
-const int PERIOD_UPDATE_TFT = 300;
-const int PERIOD_UPDATE_UI = 300;
+int PERIOD_UPDATE_UI = 300;
 const int TIME_LOST_CAN = 20;
 const int PAUSE_TOUCH_ON = 200;
 
@@ -63,6 +63,9 @@ uint8_t map_ACC_RPM[LINE][COLUM]{};
 
 const String ERROR_EVO_NEW{"Error_EVO_new.csv"};
 std::vector<String> error_evo{};
+
+// temperature_sensor_handle_t temp_sensor = NULL;
+
 
 unsigned long tim = 0;
 unsigned long time_touch = 0;
@@ -95,7 +98,7 @@ void uiTick(void *pvParameters);
 void send_CAN(void *pvParameters);
 void watch_dog_CAN(void *pvParameters);
 void taskDisplay(void *pvParameters);
-// String (uint8_t err[]);
+void taskupdateThermalState(void *pvParameters);
 int lls_tarring(int data);
 
 bool loadDisplayConfig();
@@ -312,3 +315,4 @@ WebPortal webPortal(
     applyPagesFromWeb,
     applyGeneralConfigFromWeb,
     VER);
+
