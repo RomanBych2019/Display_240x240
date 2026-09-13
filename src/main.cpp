@@ -19,7 +19,7 @@ DisplayConfig g_displayConfig = {
 void setup(void)
 {
   Serial.begin(115200);
-    delay(1000);
+  delay(1000);
 
 
   if (!LittleFS.begin(FORMAT_LITTLEFS_IF_FAILED))
@@ -167,7 +167,7 @@ void loop()
           {
             uint8_t payload[8] = {0};
             payload[0] = localGasOn ? 1 : 0;
-            Serial.println("Send CAN");
+            // Serial.println("Send CAN");
             sendCanFrame(PGN_SEND_ON_EVO, payload, 8, 100);
           }
         }
@@ -186,6 +186,10 @@ void loop()
 void analise_can_id(CanFrame &frame)
 {
   unsigned long PGN_32 = frame.identifier;
+  int maxVolumeOil {};
+  int maxVolumeLLS {};
+  int llsValue {};
+
   portENTER_CRITICAL(&dataMux);
   switch (PGN_32)
   {
@@ -236,8 +240,12 @@ void analise_can_id(CanFrame &frame)
     break;
 
   case PGN14:
-    data_can.full_tank = frame.data[0] * 10;
-    data_can.lls = lls_tarring(frame.data[1] | frame.data[2] << 8);
+    data_can.full_tank = frame.data[2] | frame.data[3] << 8;
+    maxVolumeOil = frame.data[6] | frame.data[7] << 8;
+    maxVolumeLLS = frame.data[4] | frame.data[5] << 8;
+    llsValue = frame.data[0] | frame.data[1] << 8;
+    data_can.lls = lls_tarring(llsValue, maxVolumeOil, maxVolumeLLS);
+    // log_e("LLS: %d, maxVolumeOil: %d, maxVolumeLLS: %d", llsValue, maxVolumeOil, maxVolumeLLS);
     break;
 
   default:
@@ -555,27 +563,31 @@ void watch_dog_CAN(void *pvParameters)
 }
 
 // тарирование данных уровня топлива в дизельном баке по данным с датчика LLS
-int lls_tarring(int data)
+int lls_tarring(int data, int maxVolumeOil, int maxVolumeLLS)
 {
-  std::map<int, int> table_taring{{1, 0}, {107, 200}, {344, 400}, {572, 600}, {800, 800}, {988, 1000}, {1193, 1200}, {1400, 1400}, {1606, 1600}, {1803, 1800}, {2006, 2000}, {2206, 2200}, {2407, 2400}, {2608, 2600}, {2804, 2800}, {3005, 3000}, {3202, 3200}, {3423, 3400}, {3600, 3600}, {3812, 3800}, {3863, 3850}};
-  auto iterator = table_taring.begin();
-
-  for (int i = 0; i < table_taring.size(); i++)
-  {
-    if (data > iterator->first)
-      iterator++;
-    else
-    {
-      auto min = iterator;
-      iterator++;
-      auto max = iterator;
-      return map(data, min->first, max->first, min->second, max->second);
-    }
-  }
-  if (data < 4096)
-    return 3900;
-  else
+  if (data > 4095 || maxVolumeOil == 0 || maxVolumeLLS == 0)
     return -1;
+  else 
+    return map(data, 1, maxVolumeLLS, 1, maxVolumeOil);
+  
+  // std::map<int, int> table_taring{{1, 0}, {maxVolume Oil, maxVolumeLLS}};
+  // auto iterator = table_taring.begin();
+
+  // if (data > 4095 || maxVolume Oil == 0 || maxVolumeLLS == 0)
+  //   return -1;
+
+  // for (int i = 0; i < table_taring.size(); i++)
+  // {
+  //   if (data > iterator->first)
+  //     iterator++;
+  //   else
+  //   {
+  //     auto min = iterator;
+  //     iterator++;
+  //     auto max = iterator;
+  //     return map(data, min->first, max->first, min->second, max->second);
+  //   }
+  // }
 };
 
 // загрузка настроек дисплея в json файл

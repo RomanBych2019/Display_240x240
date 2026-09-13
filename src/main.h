@@ -99,7 +99,7 @@ void send_CAN(void *pvParameters);
 void watch_dog_CAN(void *pvParameters);
 void taskDisplay(void *pvParameters);
 void taskupdateThermalState(void *pvParameters);
-int lls_tarring(int data);
+int lls_tarring(int data, int maxVolumeOil, int maxVolumeLLS);
 
 bool loadDisplayConfig();
 bool saveDisplayConfig();

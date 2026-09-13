@@ -10,5 +10,6 @@
         "cmath": "cpp",
         "*.tcc": "cpp",
         "condition_variable": "cpp"
-    }
+    },
+    "cmake.sourceDirectory": "/Users/roman/Programmer/PlatformIO/Projects/АвтогазИнжиниринг/Display 240х240/lib/TFT_eSPI-master"
 }
